@@ -1,9 +1,11 @@
 """Test Plum ecoMAX setup process."""
 
 from datetime import datetime
+import logging
 from typing import Final, cast
 from unittest.mock import AsyncMock, Mock, patch
 
+from homeassistant.components.network.const import IPV4_BROADCAST_ADDR
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_CODE,
@@ -16,12 +18,13 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.util import dt as dt_util
 from pyplumio.const import AlertType
 from pyplumio.structures.alerts import ATTR_ALERTS, Alert
+from pyplumio.structures.network_info import NetworkInfo
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.plum_ecomax import (
     PlumEcomaxData,
     async_migrate_entry,
-    async_rediscover_devices,
     async_setup_entry,
     async_setup_events,
     async_unload_entry,
@@ -31,11 +34,16 @@ from custom_components.plum_ecomax.const import (
     ATTR_FROM,
     ATTR_TO,
     CONF_CAPABILITIES,
+    CONF_HOST,
     CONF_PRODUCT_ID,
     CONF_SOFTWARE,
     CONF_SUB_DEVICES,
+    CONNECTION_TYPE_SERIAL,
+    CONNECTION_TYPE_TCP,
+    DOMAIN,
     EVENT_PLUM_ECOMAX_ALERT,
 )
+from tests.conftest import TITLE
 
 DATE_FROM: Final = "2012-12-12 00:00:00"
 DATE_TO: Final = "2012-12-12 01:00:00"
@@ -73,16 +81,56 @@ def bypass_connect_and_close():
         yield
 
 
-@pytest.mark.usefixtures("connected", "ecomax_p")
+@pytest.mark.parametrize(
+    ("connection_type", "expected_ip"),
+    (
+        (CONNECTION_TYPE_TCP, "127.0.0.1"),
+        (CONNECTION_TYPE_SERIAL, "127.0.0.2"),
+    ),
+)
+@pytest.mark.usefixtures("ecomax_p")
+@patch(
+    "custom_components.plum_ecomax.async_resolve_host_name", return_value="127.0.0.1"
+)
+@patch("custom_components.plum_ecomax.async_get_source_ip", return_value="127.0.0.2")
 async def test_setup_and_unload_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry
+    mock_async_get_source_ip,
+    mock_async_resolve_host_name,
+    connection_type: str,
+    expected_ip: str,
+    tcp_config_data,
+    serial_config_data,
+    hass: HomeAssistant,
 ) -> None:
     """Test setup and unload of config entry."""
+    config_data = (
+        tcp_config_data
+        if connection_type == CONNECTION_TYPE_TCP
+        else serial_config_data
+    )
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config_data, title=TITLE, entry_id="test"
+    )
+    config_entry.add_to_hass(hass)
     with patch("custom_components.plum_ecomax.connection.EcomaxConnection.async_setup"):
         assert await async_setup_entry(hass, config_entry)
 
     assert isinstance(data := config_entry.runtime_data, PlumEcomaxData)
     assert isinstance(connection := data.connection, EcomaxConnection)
+
+    # Test hostname resolution.
+    await hass.async_block_till_done(wait_background_tasks=True)
+    network_info = cast(NetworkInfo, connection.network_info)
+    assert network_info.ethernet.status is True
+    assert network_info.ethernet.ip == expected_ip
+    if connection_type == CONNECTION_TYPE_TCP:
+        mock_async_resolve_host_name.assert_awaited_once_with(
+            hass, host=config_data[CONF_HOST]
+        )
+    else:
+        mock_async_get_source_ip.assert_awaited_once_with(
+            hass, target_ip=IPV4_BROADCAST_ADDR
+        )
 
     # Test with exception.
     with (
@@ -108,6 +156,29 @@ async def test_setup_and_unload_entry(
     assert await async_unload_entry(hass, config_entry)
     assert config_entry.state is ConfigEntryState.NOT_LOADED
     connection.close.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("ecomax_p")
+@patch("custom_components.plum_ecomax.connection.EcomaxConnection.async_setup")
+@patch("custom_components.plum_ecomax.async_resolve_host_name", side_effect=(False,))
+async def test_setup_entry_with_name_resolution_error(
+    mock_async_setup,
+    mock_async_resolve_host_name,
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    caplog,
+) -> None:
+    """Test setting up entry with name resolution error."""
+    with caplog.at_level(logging.DEBUG):
+        assert await async_setup_entry(hass, config_entry)
+
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert "Could not resolve server IP" in caplog.text
+    assert isinstance(data := config_entry.runtime_data, PlumEcomaxData)
+    assert isinstance(connection := data.connection, EcomaxConnection)
+    network_info = cast(NetworkInfo, connection.network_info)
+    assert network_info.ethernet.status is False
+    assert network_info.ethernet.ip == "0.0.0.0"
 
 
 @pytest.mark.usefixtures("ecomax_p", "connection")
@@ -258,28 +329,3 @@ async def test_migrate_entry_with_timeout(
         assert not await async_migrate_entry(hass, config_entry)
 
     assert "Migration failed" in caplog.text
-
-
-@pytest.mark.usefixtures("ecomax_p", "connection")
-async def test_reload_config(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
-    """Test reloading config."""
-    data = config_entry.runtime_data
-    connection = data.connection
-    with (
-        patch(
-            "custom_components.plum_ecomax.async_get_sub_devices"
-        ) as mock_async_get_sub_devices,
-        patch(
-            "homeassistant.config_entries.ConfigEntries.async_update_entry"
-        ) as mock_async_update_entry,
-        patch(
-            "homeassistant.config_entries.ConfigEntries.async_reload"
-        ) as mock_async_reload,
-    ):
-        await async_rediscover_devices(hass, config_entry, connection)
-
-    mock_async_get_sub_devices.assert_awaited_once_with(connection.device)
-    expected_data = dict(config_entry.data)
-    expected_data[CONF_SUB_DEVICES] = mock_async_get_sub_devices.return_value
-    mock_async_update_entry.assert_called_once_with(config_entry, data=expected_data)
-    mock_async_reload.assert_awaited_once_with(config_entry.entry_id)

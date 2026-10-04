@@ -13,7 +13,7 @@ skip = ".git,.mypy_cache,.pytest_cache,.ruff_cache,.tox,.vscode,build,*/translat
 ignore-words-list = "hass"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 platform = "linux"
 show_error_codes = true
 follow_imports = "normal"
@@ -74,7 +74,7 @@ exclude = [
 ]
 line-length = 88
 indent-width = 4
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [
@@ -160,13 +160,11 @@ ignore = [
     "PLR0912", # Too many branches ({branches} > {max_branches})
     "PLR0913", # Too many arguments to function call ({c_args} > {max_args})
     "PLR0915", # Too many statements ({statements} > {max_statements})
+    "PLR0917", # Too many positional arguments
     "PLR2004",  # Magic value used in comparison, consider replacing {value} with a constant variable
     "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
     "UP006", # keep type annotation style as is
     "UP007", # keep type annotation style as is
-    # Ignored due to performance: https://github.com/charliermarsh/ruff/issues/2923
-    "UP038", # Use `X | Y` in `isinstance` call instead of `(X, Y)`
-
 ]
 
 [tool.ruff.lint.flake8-import-conventions.extend-aliases]
@@ -199,13 +197,14 @@ max-complexity = 25
 [tool.coverage.report]
 exclude_lines = [
     "if TYPE_CHECKING:",
-    "@overload"
+    "@overload",
+    "if __name__ == .__main__.:"
 ]
 
 [tool.tox]
 legacy_tox_ini = """
     [tox]
-    envlist = py313, lint, type
+    envlist = py314, lint, type
     isolated_build = True
     skip_missing_interpreters = True
     ignore_basepython_conflict = True
@@ -213,7 +212,7 @@ legacy_tox_ini = """
 
     [gh-actions]
     python =
-        3.13: py313, lint, type
+        3.14: py314, lint, type
 
     [testenv]
     deps =
@@ -221,7 +220,7 @@ legacy_tox_ini = """
         -r{toxinidir}/requirements_test.txt
 
     commands =
-        coverage run --source=custom_components/plum_ecomax -m pytest tests/
+        coverage run --source=custom_components/plum_ecomax,scripts -m pytest tests/
         coverage report -m
 
     [testenv:lint]
@@ -230,8 +229,9 @@ legacy_tox_ini = """
         -r{toxinidir}/requirements_test.txt
 
     commands =
-        codespell
-        ruff check .
+        prek run codespell --all-files
+        prek run ruff-check --all-files
+        prek run check-json --all-files
 
     [testenv:test]
     deps =

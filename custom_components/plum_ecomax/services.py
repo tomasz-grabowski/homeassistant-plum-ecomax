@@ -5,9 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 import difflib
 import logging
-from typing import Final, NotRequired, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    NotRequired,
+    TypedDict,
+    cast,
+)
 
-from homeassistant.const import ATTR_NAME, STATE_OFF, STATE_ON
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.const import ATTR_DEVICE_ID, ATTR_NAME, STATE_OFF, STATE_ON
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -16,22 +25,23 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.config_validation import make_entity_service_schema
-from homeassistant.helpers.service import (
-    SelectedEntities,
-    async_extract_referenced_entity_ids,
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    service,
 )
 from pyplumio.const import State, UnitOfMeasurement
-from pyplumio.devices import Device, VirtualDevice
-from pyplumio.parameters import Number, NumericType, Parameter
+from pyplumio.devices import Device, LogicalDevice
+from pyplumio.parameters import Number, Numeric, Parameter
 from pyplumio.structures.product_info import ProductInfo
 from pyplumio.structures.schedules import Schedule, ScheduleDay
 import voluptuous as vol
 
 from .connection import DEFAULT_TIMEOUT, EcomaxConnection
-from .const import ATTR_PRODUCT, ATTR_VALUE, DOMAIN, VIRTUAL_DEVICES, WEEKDAYS
+from .const import ATTR_PRODUCT, ATTR_VALUE, DOMAIN, WEEKDAYS
+
+if TYPE_CHECKING:
+    from . import PlumEcomaxConfigEntry
 
 ATTR_START: Final = "start"
 ATTR_END: Final = "end"
@@ -44,18 +54,20 @@ PRESET_DAY: Final = "day"
 PRESET_NIGHT: Final = "night"
 PRESETS = (PRESET_DAY, PRESET_NIGHT)
 
-SCHEDULES: Final = ("heating", "water_heater")
+SCHEDULES: Final = ("heating", "water_heater", "circulation_pump", "boiler_work")
 
 SERVICE_GET_PARAMETER = "get_parameter"
-SERVICE_GET_PARAMETER_SCHEMA = make_entity_service_schema(
+SERVICE_GET_PARAMETER_SCHEMA = vol.Schema(
     {
+        vol.Required(ATTR_DEVICE_ID): str,
         vol.Required(ATTR_NAME): cv.string,
     }
 )
 
 SERVICE_SET_PARAMETER = "set_parameter"
-SERVICE_SET_PARAMETER_SCHEMA = make_entity_service_schema(
+SERVICE_SET_PARAMETER_SCHEMA = vol.Schema(
     {
+        vol.Required(ATTR_DEVICE_ID): str,
         vol.Required(ATTR_NAME): cv.string,
         vol.Required(ATTR_VALUE): vol.Any(cv.positive_float, STATE_ON, STATE_OFF),
     }
@@ -64,6 +76,7 @@ SERVICE_SET_PARAMETER_SCHEMA = make_entity_service_schema(
 SERVICE_GET_SCHEDULE = "get_schedule"
 SERVICE_GET_SCHEDULE_SCHEMA = vol.Schema(
     {
+        vol.Required(ATTR_DEVICE_ID): str,
         vol.Required(ATTR_TYPE): vol.All(str, vol.In(SCHEDULES)),
         vol.Required(ATTR_WEEKDAYS): vol.All(cv.ensure_list, [vol.In(WEEKDAYS)]),
     }
@@ -72,6 +85,7 @@ SERVICE_GET_SCHEDULE_SCHEMA = vol.Schema(
 SERVICE_SET_SCHEDULE = "set_schedule"
 SERVICE_SET_SCHEDULE_SCHEMA = vol.Schema(
     {
+        vol.Required(ATTR_DEVICE_ID): str,
         vol.Required(ATTR_TYPE): vol.All(str, vol.In(SCHEDULES)),
         vol.Required(ATTR_WEEKDAYS): vol.All(cv.ensure_list, [vol.In(WEEKDAYS)]),
         vol.Required(ATTR_PRESET): vol.All(str, vol.In(PRESETS)),
@@ -80,55 +94,77 @@ SERVICE_SET_SCHEDULE_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_RESET_METER: Final = "reset_meter"
+SERVICE_CALIBRATE_METER: Final = "calibrate_meter"
+
+
 _LOGGER = logging.getLogger(__name__)
 
 
 @callback
-def async_extract_target_device(
-    device_id: str, hass: HomeAssistant, connection: EcomaxConnection
-) -> Device:
-    """Get target device by the device id."""
-    device_registry = dr.async_get(hass)
-    device = device_registry.async_get(device_id)
-    if not device:
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="device_not_found",
-            translation_placeholders={"device": device_id},
-        )
+def async_extract_connection_from_device_entry(
+    hass: HomeAssistant, device_entry: dr.BaseDeviceEntry
+) -> EcomaxConnection:
+    """Extract connection instance from device entry."""
+    entry: PlumEcomaxConfigEntry
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        if entry.entry_id in device_entry.config_entries:
+            return entry.runtime_data.connection
 
-    ecomax = connection.device
-    identifier = list(device.identifiers)[0][1]
-    for device_type in VIRTUAL_DEVICES:
-        if f"-{device_type}-" in identifier:
-            index = int(identifier.split("-", 3).pop())
-            devices = cast(
-                dict[int, VirtualDevice], ecomax.get_nowait(f"{device_type}s", {})
-            )
-            return devices.get(index, ecomax)
-
-    return ecomax
+    raise ValueError(f"No connection instance found for device id: {device_entry.id}")
 
 
 @callback
-def async_extract_referenced_devices(
-    hass: HomeAssistant, connection: EcomaxConnection, selected: SelectedEntities
-) -> set[Device]:
-    """Extract referenced devices from the selected entities."""
-    devices: set[Device] = set()
-    extracted: set[str] = set()
-    entity_registry = er.async_get(hass)
-    referenced = selected.referenced | selected.indirectly_referenced
-    for entity_id in referenced:
-        entity = entity_registry.async_get(entity_id)
-        if entity and entity.device_id and entity.device_id not in extracted:
-            devices.add(async_extract_target_device(entity.device_id, hass, connection))
-            extracted.add(entity.device_id)
+def async_get_logical_device(
+    connection: EcomaxConnection, device_id: str
+) -> LogicalDevice:
+    """Extract logical device."""
+    hub_id, device_type, index = device_id.split("-", 3)
+    if hub_id != connection.uid:
+        raise ValueError(
+            f"Invalid hub id for selected logical device: {connection.uid} != {hub_id}"
+        )
 
-    return devices
+    device = connection.device
+    devices = cast(dict[int, LogicalDevice], device.get_nowait(f"{device_type}s", {}))
+    if not (logical_device := devices.get(int(index), None)):
+        raise ValueError(f"Selected logical device not found: {device_id}")
+
+    return logical_device
 
 
-@dataclass
+@callback
+def async_get_device_from_entry(
+    hass: HomeAssistant, device_entry: dr.BaseDeviceEntry
+) -> Device:
+    """Get device instance from device entry."""
+    connection = async_extract_connection_from_device_entry(hass, device_entry)
+    for identifier in device_entry.identifiers:
+        if identifier[0] != DOMAIN:
+            continue
+
+        if identifier[1] == connection.uid:
+            return connection.device
+
+        return async_get_logical_device(connection, device_id=identifier[1])
+
+    raise ValueError(f"Invalid Plum ecoMAX device entry: {device_entry.id}")
+
+
+@callback
+def async_extract_device_from_service(
+    hass: HomeAssistant, service_call: ServiceCall
+) -> Device:
+    """Extract a connection instance from the service call."""
+    device_registry = dr.async_get(hass)
+    device_id = cast(str, service_call.data.get(ATTR_DEVICE_ID))
+    if not (device_entry := device_registry.async_get(device_id)):
+        raise ValueError(f"Unknown Plum ecoMAX device id: {device_id}")
+
+    return async_get_device_from_entry(hass, device_entry)
+
+
+@dataclass(slots=True, kw_only=True)
 class DeviceId:
     """Represents a device id.
 
@@ -140,7 +176,7 @@ class DeviceId:
     index: int
 
 
-@dataclass
+@dataclass(slots=True, kw_only=True)
 class ProductId:
     """Represents a product id.
 
@@ -152,13 +188,16 @@ class ProductId:
     uid: str
 
 
+type ParameterValue = Numeric | State | bool
+
+
 class ParameterResponse(TypedDict):
     """Represents a response from get/set parameter services."""
 
     name: str
-    value: NumericType | State | bool
-    min_value: NumericType | State | bool
-    max_value: NumericType | State | bool
+    value: ParameterValue
+    min_value: ParameterValue
+    max_value: ParameterValue
     step: NotRequired[float]
     unit_of_measurement: NotRequired[str | None]
     device: NotRequired[DeviceId]
@@ -185,7 +224,7 @@ def async_make_parameter_response(
             else parameter.unit_of_measurement
         )
 
-    if isinstance(device, VirtualDevice):
+    if isinstance(device, LogicalDevice):
         response["device"] = DeviceId(
             type=device.__class__.__name__.lower(), index=device.index + 1
         )
@@ -222,13 +261,20 @@ def async_validate_device_parameter(device: Device, name: str) -> Parameter:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="parameter_not_found_with_suggestion",
-                translation_placeholders={"parameter": name, "suggestion": suggestion},
+                translation_placeholders={
+                    "parameter": name,
+                    "suggestion": suggestion,
+                    "device": device.__class__.__name__.lower(),
+                },
             )
         else:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="parameter_not_found",
-                translation_placeholders={"parameter": name},
+                translation_placeholders={
+                    "parameter": name,
+                    "device": device.__class__.__name__.lower(),
+                },
             )
 
     if not isinstance(parameter, Parameter):
@@ -242,31 +288,18 @@ def async_validate_device_parameter(device: Device, name: str) -> Parameter:
 
 
 @callback
-def async_get_device_parameter(device: Device, name: str) -> ParameterResponse:
-    """Get device parameter."""
-    parameter = async_validate_device_parameter(device, name)
-    return async_make_parameter_response(device, parameter)
-
-
-@callback
-def async_setup_get_parameter_service(
-    hass: HomeAssistant, connection: EcomaxConnection
-) -> None:
+def async_setup_get_parameter_service(hass: HomeAssistant) -> None:
     """Set up service to get a device parameter."""
 
+    @service.verify_domain_control(DOMAIN)
     async def _async_get_parameter_service(
         service_call: ServiceCall,
     ) -> ServiceResponse:
         """Service to get a device parameter."""
         name = service_call.data[ATTR_NAME]
-        selected = async_extract_referenced_entity_ids(hass, service_call)
-        devices = async_extract_referenced_devices(hass, connection, selected)
-        response = {
-            "parameters": [
-                async_get_device_parameter(device, name) for device in devices
-            ]
-        }
-        return cast(ServiceResponse, response)
+        device = async_extract_device_from_service(hass, service_call)
+        parameter = async_validate_device_parameter(device, name)
+        return cast(ServiceResponse, async_make_parameter_response(device, parameter))
 
     hass.services.async_register(
         DOMAIN,
@@ -279,9 +312,11 @@ def async_setup_get_parameter_service(
 
 @callback
 def async_set_device_parameter(
-    device: Device, name: str, value: float
+    device: Device, service_call: ServiceCall
 ) -> ParameterResponse:
-    """Set device parameter."""
+    """Set a device parameter."""
+    name = service_call.data[ATTR_NAME]
+    value = service_call.data[ATTR_VALUE]
     parameter = async_validate_device_parameter(device, name)
     try:
         parameter.set_nowait(value, timeout=DEFAULT_TIMEOUT)
@@ -297,24 +332,16 @@ def async_set_device_parameter(
 
 
 @callback
-def async_setup_set_parameter_service(
-    hass: HomeAssistant, connection: EcomaxConnection
-) -> None:
+def async_setup_set_parameter_service(hass: HomeAssistant) -> None:
     """Set up the service to set a device parameter."""
 
+    @service.verify_domain_control(DOMAIN)
     async def _async_set_parameter_service(
         service_call: ServiceCall,
     ) -> ServiceResponse | None:
         """Service to set a device parameter."""
-        name = service_call.data[ATTR_NAME]
-        value = service_call.data[ATTR_VALUE]
-        selected = async_extract_referenced_entity_ids(hass, service_call)
-        devices = async_extract_referenced_devices(hass, connection, selected)
-        response = {
-            "parameters": [
-                async_set_device_parameter(device, name, value) for device in devices
-            ]
-        }
+        device = async_extract_device_from_service(hass, service_call)
+        response = async_set_device_parameter(device, service_call)
         return cast(ServiceResponse, response) if service_call.return_response else None
 
     hass.services.async_register(
@@ -326,35 +353,69 @@ def async_setup_set_parameter_service(
     )
 
 
+type Time = Annotated[str, "Time string in %H:%M format"]
+
+
+class ScheduleResponse(TypedDict):
+    """Represents a response from get schedule service."""
+
+    name: str
+    schedule: dict[str, dict[Time, Literal["day", "night"]]]
+    product: NotRequired[ProductId]
+
+
 @callback
-def async_setup_get_schedule_service(
-    hass: HomeAssistant, connection: EcomaxConnection
-) -> None:
+def async_validate_schedule(device: Device, name: str) -> Schedule:
+    """Validate the device parameter."""
+    schedules = cast(dict[str, Schedule], device.get_nowait(ATTR_SCHEDULES, {}))
+    if name not in schedules:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="schedule_not_found",
+            translation_placeholders={
+                "schedule": name,
+                "device": device.__class__.__name__.lower(),
+            },
+        )
+
+    return schedules[name]
+
+
+@callback
+def async_make_schedule_response(
+    device: Device, schedule: Schedule, weekdays: list[str]
+) -> ScheduleResponse:
+    """Make a parameter response."""
+    response: ScheduleResponse = {
+        "name": schedule.name,
+        "schedule": {
+            weekday: {
+                interval: PRESET_DAY if state == STATE_ON else PRESET_NIGHT
+                for interval, state in getattr(schedule, weekday).items()
+            }
+            for weekday in weekdays
+        },
+    }
+    if product_info := cast(ProductInfo | None, device.get_nowait(ATTR_PRODUCT)):
+        response["product"] = ProductId(model=product_info.model, uid=product_info.uid)
+
+    return response
+
+
+@callback
+def async_setup_get_schedule_service(hass: HomeAssistant) -> None:
     """Set up the service to get a schedule."""
 
+    @service.verify_domain_control(DOMAIN)
     async def _async_get_schedule_service(service_call: ServiceCall) -> ServiceResponse:
         """Service to get a schedule."""
-        schedule_type = service_call.data[ATTR_TYPE]
-        weekdays = service_call.data[ATTR_WEEKDAYS]
-
-        schedules = connection.device.get_nowait(ATTR_SCHEDULES, {})
-        if schedule_type not in schedules:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="schedule_not_found",
-                translation_placeholders={"schedule": schedule_type},
-            )
-
-        schedule = schedules[schedule_type]
-        return {
-            "schedule": {
-                weekday: {
-                    interval: PRESET_DAY if state == STATE_ON else PRESET_NIGHT
-                    for interval, state in getattr(schedule, weekday).items()
-                }
-                for weekday in weekdays
-            },
-        }
+        schedule_type: str = service_call.data[ATTR_TYPE]
+        weekdays: list[str] = service_call.data[ATTR_WEEKDAYS]
+        device = async_extract_device_from_service(hass, service_call)
+        schedule = async_validate_schedule(device, schedule_type)
+        return cast(
+            ServiceResponse, async_make_schedule_response(device, schedule, weekdays)
+        )
 
     hass.services.async_register(
         DOMAIN,
@@ -365,48 +426,44 @@ def async_setup_get_schedule_service(
     )
 
 
+async def async_set_device_schedule(device: Device, service_call: ServiceCall) -> None:
+    """Set device schedule."""
+    schedule_type = service_call.data[ATTR_TYPE]
+    weekdays = service_call.data[ATTR_WEEKDAYS]
+    preset = service_call.data[ATTR_PRESET]
+    start_time = service_call.data[ATTR_START]
+    end_time = service_call.data[ATTR_END]
+    schedule = async_validate_schedule(device, schedule_type)
+    for weekday in weekdays:
+        schedule_day: ScheduleDay = getattr(schedule, weekday)
+        try:
+            schedule_day.set_state(
+                True if preset == PRESET_DAY else False, start_time[:-3], end_time[:-3]
+            )
+        except ValueError as e:
+            raise ServiceValidationError(
+                str(e),
+                translation_domain=DOMAIN,
+                translation_key="invalid_schedule_interval",
+                translation_placeholders={
+                    "schedule": schedule_type,
+                    "start": start_time[:-3],
+                    "end": end_time[:-3],
+                },
+            ) from e
+
+    await schedule.commit()
+
+
 @callback
-def async_setup_set_schedule_service(
-    hass: HomeAssistant, connection: EcomaxConnection
-) -> None:
+def async_setup_set_schedule_service(hass: HomeAssistant) -> None:
     """Set up the service to set a schedule."""
 
+    @service.verify_domain_control(DOMAIN)
     async def _async_set_schedule_service(service_call: ServiceCall) -> None:
         """Service to set a schedule."""
-        schedule_type = service_call.data[ATTR_TYPE]
-        weekdays = service_call.data[ATTR_WEEKDAYS]
-        preset = service_call.data[ATTR_PRESET]
-        start_time = service_call.data[ATTR_START]
-        end_time = service_call.data[ATTR_END]
-        schedules = cast(
-            dict[str, Schedule], connection.device.get_nowait(ATTR_SCHEDULES, {})
-        )
-        if schedule_type not in schedules:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="schedule_not_found",
-                translation_placeholders={"schedule": schedule_type},
-            )
-
-        schedule = schedules[schedule_type]
-        state = bool(preset == "day")
-        for weekday in weekdays:
-            schedule_day: ScheduleDay = getattr(schedule, weekday)
-            try:
-                schedule_day.set_state(state, start_time[:-3], end_time[:-3])
-            except ValueError as e:
-                raise ServiceValidationError(
-                    str(e),
-                    translation_domain=DOMAIN,
-                    translation_key="invalid_schedule_interval",
-                    translation_placeholders={
-                        "schedule": schedule_type,
-                        "start": start_time[:-3],
-                        "end": end_time[:-3],
-                    },
-                ) from e
-
-        await schedule.commit()
+        device = async_extract_device_from_service(hass, service_call)
+        await async_set_device_schedule(device, service_call)
 
     hass.services.async_register(
         DOMAIN,
@@ -417,12 +474,29 @@ def async_setup_set_schedule_service(
 
 
 @callback
-def async_setup_services(hass: HomeAssistant, connection: EcomaxConnection) -> bool:
+def async_setup_services(hass: HomeAssistant) -> bool:
     """Set up the ecoMAX services."""
     _LOGGER.debug("Starting setup of services...")
 
-    async_setup_get_parameter_service(hass, connection)
-    async_setup_set_parameter_service(hass, connection)
-    async_setup_get_schedule_service(hass, connection)
-    async_setup_set_schedule_service(hass, connection)
+    async_setup_get_parameter_service(hass)
+    async_setup_set_parameter_service(hass)
+    async_setup_get_schedule_service(hass)
+    async_setup_set_schedule_service(hass)
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_RESET_METER,
+        entity_domain=SENSOR_DOMAIN,
+        func="async_reset_meter",
+        schema={},
+    )
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_CALIBRATE_METER,
+        entity_domain=SENSOR_DOMAIN,
+        func="async_calibrate_meter",
+        schema={vol.Required(ATTR_VALUE): cv.positive_float},
+    )
+
     return True

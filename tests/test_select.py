@@ -2,20 +2,20 @@
 
 from unittest.mock import patch
 
-from homeassistant.components.select.const import (
+from homeassistant.components.select.const import ATTR_OPTIONS, DOMAIN
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
     ATTR_OPTION,
-    ATTR_OPTIONS,
-    DOMAIN,
     SERVICE_SELECT_OPTION,
+    STATE_OFF,
 )
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, STATE_OFF
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from pyplumio.parameters import ParameterValues
 from pyplumio.parameters.ecomax import EcomaxNumber, EcomaxNumberDescription
 from pyplumio.parameters.mixer import MixerNumber, MixerNumberDescription
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.plum_ecomax.connection import EcomaxConnection
 from custom_components.plum_ecomax.select import (
@@ -43,11 +43,6 @@ def bypass_async_migrate_entry():
         yield
 
 
-@pytest.fixture(autouse=True)
-def set_connected(connected):
-    """Assume connected."""
-
-
 @pytest.fixture(name="async_select_option")
 async def fixture_async_select_option():
     """Select the option."""
@@ -68,12 +63,11 @@ async def fixture_async_select_option():
 async def test_summer_mode_select(
     hass: HomeAssistant,
     connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
     async_select_option,
 ) -> None:
     """Test summer mode select."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     summer_mode_entity_id = "select.ecomax_summer_mode"
     summer_mode_select_key = "summer_mode"
 
@@ -120,12 +114,11 @@ async def test_summer_mode_select(
 async def test_mixer_work_mode_select(
     hass: HomeAssistant,
     connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
     async_select_option,
 ) -> None:
     """Test mixer work mode select."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     work_mode_entity_id = "select.ecomax_mixer_1_work_mode"
     work_mode_select_key = "work_mode"
 
@@ -176,12 +169,11 @@ async def test_mixer_work_mode_select(
 async def test_circuit_work_mode_select(
     hass: HomeAssistant,
     connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
     async_select_option,
 ) -> None:
     """Test circuit support select."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     work_mode_entity_id = "select.ecomax_circuit_2_work_mode"
     work_mode_select_key = "enable_circuit"
 
@@ -229,12 +221,10 @@ async def test_circuit_work_mode_select(
 
 @pytest.mark.usefixtures("ecomax_i", "mixers")
 async def test_circuit_work_mode_select_is_unavailable_for_first_circuit(
-    hass: HomeAssistant,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, setup_config_entry
 ) -> None:
     """Test circuit support select is not available for first circuit."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     work_mode_entity_id = "select.ecomax_circuit_1_work_mode"
 
     # Test entry.

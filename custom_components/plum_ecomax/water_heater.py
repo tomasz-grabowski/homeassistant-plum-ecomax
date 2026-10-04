@@ -22,12 +22,15 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pyplumio.filters import Filter, on_change, throttle
+from pyplumio.filters import Filter, deadband, on_change, throttle
 from pyplumio.parameters import Parameter
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
+from .const import DEFAULT_TOLERANCE
 from .entity import EcomaxEntity, EcomaxEntityDescription
+
+UPDATE_INTERVAL: Final = 10
 
 TEMPERATURE_STEP: Final = 1
 
@@ -74,7 +77,10 @@ class EcomaxWaterHeater(EcomaxEntity, WaterHeaterEntity):
     ):
         """Initialize a new ecoMAX climate entity."""
         self._callbacks = {
-            "water_heater_temp": throttle(on_change(self.async_update), seconds=10),
+            "water_heater_temp": throttle(
+                deadband(self.async_update, tolerance=DEFAULT_TOLERANCE),
+                seconds=UPDATE_INTERVAL,
+            ),
             "water_heater_target_temp": on_change(self.async_update_target_temp),
             "water_heater_work_mode": on_change(self.async_update_work_mode),
             "water_heater_hysteresis": on_change(self.async_update_hysteresis),

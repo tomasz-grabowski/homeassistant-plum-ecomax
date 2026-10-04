@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any, Final, cast, overload
+from typing import Any, Final, cast
 
 from homeassistant.components.climate import (
     PRESET_AWAY,
@@ -24,12 +24,15 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pyplumio.filters import Filter, on_change, throttle
+from pyplumio.filters import Filter, deadband, on_change, throttle
 from pyplumio.parameters.thermostat import ThermostatNumber
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
+from .const import DEFAULT_TOLERANCE
 from .entity import EcomaxEntityDescription, ThermostatEntity
+
+UPDATE_INTERVAL: Final = 10
 
 TEMPERATURE_STEP: Final = 0.1
 
@@ -104,7 +107,10 @@ class EcomaxClimate(ThermostatEntity, ClimateEntity):
             "mode": on_change(self.async_update_preset_mode),
             "state": on_change(self.async_update_preset_mode),
             "contacts": on_change(self.async_update_hvac_action),
-            "current_temp": throttle(on_change(self.async_update), seconds=10),
+            "current_temp": throttle(
+                deadband(self.async_update, tolerance=DEFAULT_TOLERANCE),
+                seconds=UPDATE_INTERVAL,
+            ),
             "target_temp": on_change(self.async_update_target_temperature),
         }
         self.index = index
@@ -137,13 +143,7 @@ class EcomaxClimate(ThermostatEntity, ClimateEntity):
         await self._async_update_target_temperature_attributes(value)
         self.async_write_ha_state()
 
-    @overload
-    async def async_update_preset_mode(self, mode: int) -> None: ...
-
-    @overload
-    async def async_update_preset_mode(self, mode: ThermostatNumber) -> None: ...
-
-    async def async_update_preset_mode(self, mode: Any) -> None:
+    async def async_update_preset_mode(self, mode: ThermostatNumber | int) -> None:
         """Update preset mode."""
         if isinstance(mode, ThermostatNumber):
             mode = int(mode.value)

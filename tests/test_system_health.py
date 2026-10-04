@@ -4,13 +4,16 @@ from datetime import datetime
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from homeassistant.components.system_health import (
+    DATA_SYSTEM_HEALTH_PLATFORMS,
+    DOMAIN as SYSTEM_HEALTH_DOMAIN,
+)
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pyplumio import __version__ as pyplumio_version
 from pyplumio.protocol import Statistics
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.plum_ecomax import DOMAIN
 from custom_components.plum_ecomax.const import ATTR_ENTITIES
@@ -32,9 +35,11 @@ def bypass_connection_setup():
 
 async def get_system_health_info(hass: HomeAssistant, domain: str) -> dict[str, Any]:
     """Get system health info."""
-    return cast(
-        dict[str, Any], await hass.data["system_health"][domain].info_callback(hass)
-    )
+    platform_registrations = await hass.data[
+        DATA_SYSTEM_HEALTH_PLATFORMS
+    ].async_get_platforms()
+    registrations = {**hass.data[SYSTEM_HEALTH_DOMAIN], **platform_registrations}
+    return cast(dict[str, Any], await registrations[domain].info_callback(hass))
 
 
 @pytest.mark.parametrize(
@@ -52,14 +57,11 @@ async def test_system_health(
     failed_frames: int,
     expected_failure_rate: str,
     hass: HomeAssistant,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test Plum ecoMAX system health."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "custom_binary_sensor": {
@@ -82,7 +84,7 @@ async def test_system_health(
                     }
                 },
             }
-        },
+        }
     )
     assert await async_setup_component(hass, "system_health", {})
     await hass.async_block_till_done()

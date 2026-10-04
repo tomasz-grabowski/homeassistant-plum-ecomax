@@ -4,6 +4,7 @@ from enum import StrEnum, unique
 from typing import Final
 
 DOMAIN = "plum_ecomax"
+MANUFACTURER: Final = "Plum Sp. z o.o."
 
 # Generic attributes.
 ATTR_ENTITIES: Final = "entities"
@@ -68,6 +69,7 @@ DEFAULT_BAUDRATE: Final = BAUDRATES[-1]
 DEFAULT_CONNECTION_TYPE: Final = CONNECTION_TYPE_TCP
 DEFAULT_DEVICE: Final = "/dev/ttyUSB0"
 DEFAULT_PORT: Final = 8899
+DEFAULT_TOLERANCE: Final = 0.1
 
 # Events.
 EVENT_PLUM_ECOMAX_ALERT: Final = "plum_ecomax_alert"
@@ -82,7 +84,7 @@ class DeviceType(StrEnum):
     THERMOSTAT = "thermostat"
 
 
-VIRTUAL_DEVICES: Final = (DeviceType.MIXER, DeviceType.THERMOSTAT)
+LOGICAL_DEVICES: Final = (DeviceType.MIXER, DeviceType.THERMOSTAT)
 
 
 @unique

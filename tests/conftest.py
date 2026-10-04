@@ -1,7 +1,7 @@
 """Fixtures for the test suite."""
 
 import asyncio
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 import json
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, Mock, patch
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from homeassistant.core import HomeAssistant
 from pyplumio.connection import Connection
 from pyplumio.const import DeviceState, ProductType, UnitOfMeasurement
-from pyplumio.devices import PhysicalDevice, VirtualDevice
+from pyplumio.devices import LogicalDevice, PhysicalDevice
 from pyplumio.devices.ecomax import EcoMAX
 from pyplumio.devices.mixer import Mixer
 from pyplumio.devices.thermostat import Thermostat
@@ -28,9 +28,9 @@ from pyplumio.parameters.mixer import (
 )
 from pyplumio.parameters.thermostat import ThermostatNumber, ThermostatNumberDescription
 from pyplumio.structures.ecomax_parameters import ATTR_ECOMAX_CONTROL
-from pyplumio.structures.modules import ConnectedModules
 from pyplumio.structures.network_info import NetworkInfo
 from pyplumio.structures.product_info import ProductInfo
+from pyplumio.structures.sensor_data import ConnectedModules
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry, load_fixture
 
@@ -92,25 +92,25 @@ def bypass_pyplumio_events():
 
 
 @pytest.fixture(name="tcp_user_input")
-def fixture_tcp_user_input():
+def fixture_tcp_user_input() -> dict[str, Any]:
     """Get the TCP config data."""
-    yield {
+    return {
         CONF_HOST: HOST,
         CONF_PORT: DEFAULT_PORT,
     }
 
 
 @pytest.fixture(name="serial_user_input")
-def fixture_serial_user_input():
+def fixture_serial_user_input() -> dict[str, Any]:
     """Get the serial config data."""
-    yield {
+    return {
         CONF_DEVICE: DEFAULT_DEVICE,
         CONF_BAUDRATE: DEFAULT_BAUDRATE,
     }
 
 
 @pytest.fixture(name="config_data")
-def fixture_config_data():
+def fixture_config_data() -> dict[str, Any]:
     """Get the data for config flow."""
     return {
         CONF_UID: "TEST",
@@ -130,40 +130,39 @@ def fixture_config_data():
 
 
 @pytest.fixture(name="tcp_config_data")
-def fixture_tcp_config_data(tcp_user_input, config_data):
+def fixture_tcp_config_data(tcp_user_input, config_data) -> dict[str, Any]:
     """Inject the TCP connection type."""
-    config_data |= tcp_user_input
-    config_data.update({CONF_CONNECTION_TYPE: CONNECTION_TYPE_TCP})
-
-    yield config_data
+    tcp_config_data = dict(config_data)
+    tcp_config_data |= tcp_user_input
+    tcp_config_data.update({CONF_CONNECTION_TYPE: CONNECTION_TYPE_TCP})
+    return tcp_config_data
 
 
 @pytest.fixture(name="serial_config_data")
-def fixture_serial_config_data(serial_user_input, config_data):
+def fixture_serial_config_data(serial_user_input, config_data) -> dict[str, Any]:
     """Inject the serial connection type."""
-    config_data |= serial_user_input
-    config_data.update({CONF_CONNECTION_TYPE: CONNECTION_TYPE_SERIAL})
-
-    yield config_data
+    serial_config_data = dict(config_data)
+    serial_config_data |= serial_user_input
+    serial_config_data.update({CONF_CONNECTION_TYPE: CONNECTION_TYPE_SERIAL})
+    return serial_config_data
 
 
 @pytest.fixture
-async def setup_integration():
-    """Set up the integration."""
+def setup_config_entry(hass: HomeAssistant, config_entry: MockConfigEntry):
+    """Return integration setup."""
 
-    async def setup_entry(
-        hass: HomeAssistant,
-        config_entry: MockConfigEntry,
-        options: dict[str, Any] | None = None,
-    ):
+    async def _setup_config_entry_config_entry(options: dict[str, Any] | None = None):
+        """Set up the config entry for integration."""
         if options:
             hass.config_entries.async_update_entry(config_entry, options=options)
 
-        config_entry.add_to_hass(hass)
+        if config_entry.entry_id not in hass.config_entries.async_entry_ids():
+            config_entry.add_to_hass(hass)
+
         assert await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 
-    return setup_entry
+    return _setup_config_entry_config_entry
 
 
 @pytest.fixture(name="config_entry")
@@ -189,19 +188,6 @@ def fixture_connection(
     return connection
 
 
-@pytest.fixture
-def connected():
-    """Integration is connected."""
-    event = AsyncMock(spec=asyncio.Event)
-    event.is_set = Mock(return_value=True)
-    with patch(
-        "custom_components.plum_ecomax.connection.EcomaxConnection.connected",
-        event,
-        create=True,
-    ):
-        yield
-
-
 class MutableEcoMAX(EcoMAX):
     """Allows to set otherwise properties readonly due to __slots__."""
 
@@ -211,8 +197,15 @@ class MutableEcoMAX(EcoMAX):
 @pytest.fixture(name="ecomax_base")
 def fixture_ecomax_base() -> Generator[EcoMAX]:
     """Return base ecoMAX device with no data."""
-    ecomax = MutableEcoMAX(queue=Mock(), network=NetworkInfo())
+    event = AsyncMock(spec=asyncio.Event)
+    event.is_set = Mock(return_value=True)
+    ecomax = MutableEcoMAX(write_queue=Mock(), network_info=NetworkInfo())
     with (
+        patch(
+            "custom_components.plum_ecomax.connection.EcomaxConnection.connected",
+            event,
+            create=True,
+        ),
         patch(
             "custom_components.plum_ecomax.connection.EcomaxConnection.device", ecomax
         ),
@@ -227,12 +220,11 @@ def fixture_ecomax_base() -> Generator[EcoMAX]:
 
 
 @pytest.fixture(name="ecomax_common")
-def fixture_ecomax_common(ecomax_base: EcoMAX):
+async def fixture_ecomax_common(ecomax_base: EcoMAX) -> EcoMAX:
     """Inject common ecomax data."""
-    ecomax_base.data.update(
+    await ecomax_base.load(
         {
-            "sensors": True,
-            "ecomax_parameters": True,
+            "sensors": {},
             "heating_pump": False,
             "circulation_pump": False,
             "pending_alerts": False,
@@ -249,13 +241,13 @@ def fixture_ecomax_common(ecomax_base: EcoMAX):
             ),
         }
     )
-    yield ecomax_base
+    return ecomax_base
 
 
 @pytest.fixture
-def ecomax_control(ecomax_common: EcoMAX):
+async def ecomax_control(ecomax_common: EcoMAX) -> EcoMAX:
     """Inject ecomax control parameter."""
-    ecomax_common.data.update(
+    await ecomax_common.load(
         {
             ATTR_ECOMAX_CONTROL: EcomaxSwitch(
                 device=ecomax_common,
@@ -264,13 +256,13 @@ def ecomax_control(ecomax_common: EcoMAX):
             )
         }
     )
-    yield ecomax_common
+    return ecomax_common
 
 
 @pytest.fixture(name="ecomax_p")
-def fixture_ecomax_p(ecomax_common: EcoMAX):
+async def fixture_ecomax_p(ecomax_common: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject ecomax p data."""
-    ecomax_common.data.update(
+    await ecomax_common.load(
         {
             "product": ProductInfo(
                 type=ProductType.ECOMAX_P,
@@ -372,6 +364,20 @@ def fixture_ecomax_p(ecomax_common: EcoMAX):
                 values=ParameterValues(value=0, min_value=0, max_value=1),
                 description=EcomaxSwitchDescription("fuzzy_logic"),
             ),
+            "schedules": [
+                (
+                    0,
+                    [
+                        [True, True, False, True],
+                        [True, True, False, True],
+                        [True, True, True, True],
+                        [True, True, False, True],
+                        [True, True, False, True],
+                        [True, True, False, True],
+                        [True, True, False, True],
+                    ],
+                )
+            ],
         }
     )
 
@@ -389,9 +395,9 @@ def fixture_ecomax_p(ecomax_common: EcoMAX):
 
 
 @pytest.fixture(name="ecomax_i")
-def fixture_ecomax_i(ecomax_common: EcoMAX):
+async def fixture_ecomax_i(ecomax_common: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject ecomax i data."""
-    ecomax_common.data.update(
+    await ecomax_common.load(
         {
             "product": ProductInfo(
                 type=ProductType.ECOMAX_I,
@@ -429,7 +435,7 @@ def fixture_ecomax_i(ecomax_common: EcoMAX):
 
 
 @pytest.fixture
-def ecomax_860p3_o(ecomax_p: EcoMAX):
+async def ecomax_860p3_o(ecomax_p: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject data for ecoMAX 860P3-O.
 
     (product_type: 0, product_id: 51)
@@ -437,7 +443,7 @@ def ecomax_860p3_o(ecomax_p: EcoMAX):
     product_type = ProductType.ECOMAX_P
     product_model = "ecoMAX 860P3-O"
 
-    ecomax_p.data.update(
+    await ecomax_p.load(
         {
             ATTR_PRODUCT: ProductInfo(
                 type=product_type,
@@ -459,9 +465,9 @@ def ecomax_860p3_o(ecomax_p: EcoMAX):
 
 
 @pytest.fixture
-def water_heater(ecomax_common: EcoMAX):
+async def water_heater(ecomax_common: EcoMAX):
     """Inject water heater data."""
-    ecomax_common.data.update(
+    await ecomax_common.load(
         {
             "water_heater_pump": False,
             "water_heater_temp": 0.0,
@@ -505,109 +511,111 @@ def water_heater(ecomax_common: EcoMAX):
 
 
 @pytest.fixture
-def mixers(ecomax_common: EcoMAX):
+async def mixers(ecomax_common: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject mixer data."""
-    mixer_0 = Mixer(queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
-    mixer_0.data = {
-        "pump": False,
-        "current_temp": 0.0,
-        "target_temp": 0,
-        "work_mode": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=3),
-            description=MixerNumberDescription("work_mode"),
-        ),
-        "mixer_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "mixer_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "circuit_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "circuit_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "min_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "min_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "max_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "max_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "weather_control": MixerSwitch(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerSwitchDescription("weather_control"),
-        ),
-        "disable_pump_on_thermostat": MixerSwitch(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerSwitchDescription("disable_pump_on_thermostat"),
-        ),
-        "summer_work": MixerSwitch(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerSwitchDescription("summer_work"),
-        ),
-        "enable_circuit": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription("enable_circuit"),
-        ),
-    }
-
-    mixer_1 = Mixer(queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
-    mixer_1.data = {
-        "enable_circuit": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=2),
-            description=MixerNumberDescription("enable_circuit"),
-        ),
-        "day_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "day_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "night_target_temp": MixerNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "night_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "min_target_temp": EcomaxNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "min_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-        "max_target_temp": EcomaxNumber(
-            device=ecomax_common,
-            values=ParameterValues(value=0, min_value=0, max_value=1),
-            description=MixerNumberDescription(
-                "max_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
-            ),
-        ),
-    }
-
-    ecomax_common.data.update(
+    mixer_0 = Mixer(write_queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
+    await mixer_0.load(
         {
-            "mixer_sensors": True,
-            "mixer_parameters": True,
+            "pump": False,
+            "current_temp": 0.0,
+            "target_temp": 0,
+            "work_mode": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=3),
+                description=MixerNumberDescription("work_mode"),
+            ),
+            "mixer_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "mixer_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "circuit_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "circuit_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "min_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "min_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "max_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "max_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "weather_control": MixerSwitch(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerSwitchDescription("weather_control"),
+            ),
+            "disable_pump_on_thermostat": MixerSwitch(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerSwitchDescription("disable_pump_on_thermostat"),
+            ),
+            "summer_work": MixerSwitch(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerSwitchDescription("summer_work"),
+            ),
+            "enable_circuit": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription("enable_circuit"),
+            ),
+        }
+    )
+
+    mixer_1 = Mixer(write_queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
+    await mixer_1.load(
+        {
+            "enable_circuit": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=2),
+                description=MixerNumberDescription("enable_circuit"),
+            ),
+            "day_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "day_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "night_target_temp": MixerNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "night_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "min_target_temp": EcomaxNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "min_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+            "max_target_temp": EcomaxNumber(
+                device=ecomax_common,
+                values=ParameterValues(value=0, min_value=0, max_value=1),
+                description=MixerNumberDescription(
+                    "max_target_temp", unit_of_measurement=UnitOfMeasurement.CELSIUS
+                ),
+            ),
+        }
+    )
+
+    await ecomax_common.load(
+        {
             "mixers_available": 2,
             "mixers_connected": 2,
             "mixers": {
@@ -630,92 +638,92 @@ def mixers(ecomax_common: EcoMAX):
 
 
 @pytest.fixture
-def thermostats(ecomax_common: EcoMAX):
+async def thermostats(ecomax_common: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject thermostats data."""
-    thermostat = Thermostat(queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
-    thermostat.data = {
-        "state": 0,
-        "current_temp": 0.0,
-        "target_temp": 16.0,
-        "contacts": False,
-        "schedule": False,
-        "mode": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=0, min_value=0, max_value=7),
-            description=ThermostatNumberDescription("mode"),
-        ),
-        "hysteresis": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=5, min_value=0, max_value=50),
-            description=ThermostatNumberDescription(
-                "hysteresis",
-                step=0.1,
-                unit_of_measurement=UnitOfMeasurement.CELSIUS,
-            ),
-        ),
-        "party_target_temp": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=100, min_value=100, max_value=350),
-            description=ThermostatNumberDescription(
-                "party_target_temp",
-                step=0.1,
-                size=2,
-                unit_of_measurement=UnitOfMeasurement.DAYS,
-            ),
-        ),
-        "holidays_target_temp": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=70, min_value=0, max_value=600),
-            description=ThermostatNumberDescription(
-                "holidays_target_temp",
-                step=0.1,
-                size=2,
-                unit_of_measurement=UnitOfMeasurement.DAYS,
-            ),
-        ),
-        "antifreeze_target_temp": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=90, min_value=50, max_value=300),
-            description=ThermostatNumberDescription(
-                "antifreeze_target_temp",
-                step=0.1,
-                size=2,
-                unit_of_measurement=UnitOfMeasurement.CELSIUS,
-            ),
-        ),
-        "day_target_temp": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=160, min_value=100, max_value=350),
-            description=ThermostatNumberDescription(
-                "day_target_temp",
-                step=0.1,
-                size=2,
-                unit_of_measurement=UnitOfMeasurement.CELSIUS,
-            ),
-        ),
-        "night_target_temp": ThermostatNumber(
-            offset=0,
-            device=thermostat,
-            values=ParameterValues(value=100, min_value=100, max_value=200),
-            description=ThermostatNumberDescription(
-                "night_target_temp",
-                step=0.1,
-                size=2,
-                unit_of_measurement=UnitOfMeasurement.CELSIUS,
-            ),
-        ),
-    }
-
-    ecomax_common.data.update(
+    thermostat = Thermostat(write_queue=Mock(spec=asyncio.Queue), parent=ecomax_common)
+    await thermostat.load(
         {
-            "thermostat_sensors": True,
-            "thermostat_parameters": True,
+            "state": 0,
+            "current_temp": 0.0,
+            "target_temp": 16.0,
+            "contacts": False,
+            "schedule": False,
+            "mode": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=0, min_value=0, max_value=7),
+                description=ThermostatNumberDescription("mode"),
+            ),
+            "hysteresis": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=5, min_value=0, max_value=50),
+                description=ThermostatNumberDescription(
+                    "hysteresis",
+                    step=0.1,
+                    unit_of_measurement=UnitOfMeasurement.CELSIUS,
+                ),
+            ),
+            "party_target_temp": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=100, min_value=100, max_value=350),
+                description=ThermostatNumberDescription(
+                    "party_target_temp",
+                    step=0.1,
+                    size=2,
+                    unit_of_measurement=UnitOfMeasurement.DAYS,
+                ),
+            ),
+            "holidays_target_temp": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=70, min_value=0, max_value=600),
+                description=ThermostatNumberDescription(
+                    "holidays_target_temp",
+                    step=0.1,
+                    size=2,
+                    unit_of_measurement=UnitOfMeasurement.DAYS,
+                ),
+            ),
+            "antifreeze_target_temp": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=90, min_value=50, max_value=300),
+                description=ThermostatNumberDescription(
+                    "antifreeze_target_temp",
+                    step=0.1,
+                    size=2,
+                    unit_of_measurement=UnitOfMeasurement.CELSIUS,
+                ),
+            ),
+            "day_target_temp": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=160, min_value=100, max_value=350),
+                description=ThermostatNumberDescription(
+                    "day_target_temp",
+                    step=0.1,
+                    size=2,
+                    unit_of_measurement=UnitOfMeasurement.CELSIUS,
+                ),
+            ),
+            "night_target_temp": ThermostatNumber(
+                offset=0,
+                device=thermostat,
+                values=ParameterValues(value=100, min_value=100, max_value=200),
+                description=ThermostatNumberDescription(
+                    "night_target_temp",
+                    step=0.1,
+                    size=2,
+                    unit_of_measurement=UnitOfMeasurement.CELSIUS,
+                ),
+            ),
+        }
+    )
+
+    await ecomax_common.load(
+        {
             "thermostats_available": 1,
             "thermostats_connected": 1,
             "thermostats": {0: thermostat},
@@ -733,7 +741,7 @@ def thermostats(ecomax_common: EcoMAX):
 
 
 @pytest.fixture
-def custom_fields(ecomax_common: EcoMAX):
+async def custom_fields(ecomax_common: EcoMAX) -> AsyncGenerator[EcoMAX]:
     """Inject custom fields."""
 
     custom_fields = {
@@ -752,15 +760,15 @@ def custom_fields(ecomax_common: EcoMAX):
         ),
     }
 
-    ecomax_common.data.update(custom_fields)
+    await ecomax_common.load(custom_fields)
 
     mixers: dict[int, Mixer] = ecomax_common.data.get(ATTR_MIXERS, {})
     for mixer in mixers.values():
-        mixer.data.update(custom_fields)
+        await mixer.load(custom_fields)
 
     thermostats: dict[int, Thermostat] = ecomax_common.data.get(ATTR_THERMOSTATS, {})
     for thermostat in thermostats.values():
-        thermostat.data.update(custom_fields)
+        await thermostat.load(custom_fields)
 
     regdata: dict[int, Any] = ecomax_common.data.get(ATTR_REGDATA, {})
     if regdata:
@@ -780,7 +788,7 @@ async def dispatch_value(
         await physical_device.dispatch(name, value)
     else:
         device_type, index = source_device.rsplit("_", 1)
-        vitual_devices = cast(
-            dict[int, VirtualDevice], physical_device.get_nowait(f"{device_type}s")
+        devices = cast(
+            dict[int, LogicalDevice], physical_device.get_nowait(f"{device_type}s")
         )
-        await vitual_devices[int(index)].dispatch(name, value)
+        await devices[int(index)].dispatch(name, value)

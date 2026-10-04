@@ -1,25 +1,21 @@
 ---
 get_parameter:
-  target:
-    device:
-      integration: "plum_ecomax"
   fields:
-    name:
+    device_id: &device_id
+      required: true
+      selector:
+        device:
+          integration: plum_ecomax
+    name: &name
       example: "heating_target_temp"
       required: true
       selector:
         text:
 
 set_parameter:
-  target:
-    device:
-      integration: "plum_ecomax"
   fields:
-    name:
-      example: "heating_target_temp"
-      required: true
-      selector:
-        text:
+    device_id: *device_id
+    name: *name
     value:
       example: "65"
       required: true
@@ -28,6 +24,7 @@ set_parameter:
 
 get_schedule:
   fields:
+    device_id: *device_id
     type:
       example: "heating"
       required: true
@@ -37,6 +34,8 @@ get_schedule:
           options:
             - "heating"
             - "water_heater"
+            - "circulation_pump"
+            - "boiler_work"
     weekdays:
       example: "monday"
       required: true
@@ -55,6 +54,7 @@ get_schedule:
 
 set_schedule:
   fields:
+    device_id: *device_id
     type:
       example: "heating"
       required: true
@@ -64,6 +64,8 @@ set_schedule:
           options:
             - "heating"
             - "water_heater"
+            - "circulation_pump"
+            - "boiler_work"
     weekdays:
       example: "monday"
       required: true

@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from functools import cache
 import logging
+import math
 from typing import Any, cast, overload
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -44,14 +45,13 @@ from homeassistant.helpers import entity_registry as er, selector
 import homeassistant.helpers.config_validation as cv
 from pyplumio.connection import Connection
 from pyplumio.const import ProductType
-from pyplumio.devices import PhysicalDevice, VirtualDevice
+from pyplumio.devices import LogicalDevice, PhysicalDevice
 from pyplumio.exceptions import ConnectionFailedError
-from pyplumio.parameters import Number, NumericType, State, Switch, UnitOfMeasurement
-from pyplumio.structures.modules import ConnectedModules
+from pyplumio.parameters import Number, Numeric, State, Switch, UnitOfMeasurement
 from pyplumio.structures.product_info import ProductInfo
+from pyplumio.structures.sensor_data import ConnectedModules
 import voluptuous as vol
 
-from . import async_rediscover_devices
 from .connection import (
     DEFAULT_TIMEOUT,
     EcomaxConnection,
@@ -87,7 +87,7 @@ from .const import (
     DEFAULT_DEVICE,
     DEFAULT_PORT,
     DOMAIN,
-    VIRTUAL_DEVICES,
+    LOGICAL_DEVICES,
     DeviceType,
 )
 
@@ -108,16 +108,14 @@ STEP_SERIAL_DATA_SCHEMA = vol.Schema(
 )
 
 
-async def validate_input(
-    connection_type: str, hass: HomeAssistant, data: Mapping[str, Any]
-) -> Connection:
+async def validate_input(connection_type: str, data: Mapping[str, Any]) -> Connection:
     """Validate the user input allows us to connect.
 
     Data has the keys from STEP_TCP_DATA_SCHEMA or
     STEP_SERIAL_DATA_SCHEMA with values provided by the user.
     """
     try:
-        connection = await async_get_connection_handler(connection_type, hass, data)
+        connection = await async_get_connection_handler(connection_type, data)
         await asyncio.wait_for(connection.connect(), timeout=DEFAULT_TIMEOUT)
     except ConnectionFailedError as connection_failure:
         raise CannotConnect from connection_failure
@@ -144,7 +142,7 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         self.device: PhysicalDevice | None = None
         self.discover_task: asyncio.Task | None = None
         self.identify_task: asyncio.Task | None = None
-        self.init_info: dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -162,15 +160,13 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="tcp", data_schema=STEP_TCP_DATA_SCHEMA)
 
-        errors = {}
+        errors: dict[str, str] = {}
 
         try:
             connection_type = CONNECTION_TYPE_TCP
-            self.connection = await validate_input(
-                connection_type, self.hass, user_input
-            )
-            self.init_info = user_input
-            self.init_info[CONF_CONNECTION_TYPE] = connection_type
+            self.connection = await validate_input(connection_type, user_input)
+            self._data = deepcopy(user_input)
+            self._data[CONF_CONNECTION_TYPE] = connection_type
             return await self.async_step_identify()
         except CannotConnect:
             errors[CONF_BASE] = "cannot_connect"
@@ -193,15 +189,13 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
                 step_id="serial", data_schema=STEP_SERIAL_DATA_SCHEMA
             )
 
-        errors = {}
+        errors: dict[str, str] = {}
 
         try:
             connection_type = CONNECTION_TYPE_SERIAL
-            self.connection = await validate_input(
-                connection_type, self.hass, user_input
-            )
-            self.init_info = user_input
-            self.init_info[CONF_CONNECTION_TYPE] = connection_type
+            self.connection = await validate_input(connection_type, user_input)
+            self._data = deepcopy(user_input)
+            self._data[CONF_CONNECTION_TYPE] = connection_type
             return await self.async_step_identify()
         except CannotConnect:
             errors[CONF_BASE] = "cannot_connect"
@@ -247,7 +241,7 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Discover connected modules."""
-        await self._async_set_unique_id(self.init_info[CONF_UID])
+        await self._async_set_unique_id(self._data[CONF_UID])
 
         if not self.discover_task:
             self.discover_task = self.hass.async_create_task(
@@ -259,7 +253,7 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
                 step_id="discover",
                 progress_action="discover_modules",
                 progress_task=self.discover_task,
-                description_placeholders={"model": self.init_info[CONF_MODEL]},
+                description_placeholders={"model": self._data[CONF_MODEL]},
             )
 
         try:
@@ -279,9 +273,7 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         if self.connection:
             await self.connection.close()
 
-        return self.async_create_entry(
-            title=self.init_info[CONF_MODEL], data=self.init_info
-        )
+        return self.async_create_entry(title=self._data[CONF_MODEL], data=self._data)
 
     async def async_step_device_not_found(
         self, user_input: dict[str, Any] | None = None
@@ -305,20 +297,20 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         """Task to identify the device."""
         # Tell mypy that once we here, connection is not None
         connection = cast(Connection, self.connection)
-        self.device = cast(
-            PhysicalDevice,
-            await connection.get(DeviceType.ECOMAX, timeout=DEFAULT_TIMEOUT),
-        )
-        product: ProductInfo = await self.device.get(
-            ATTR_PRODUCT, timeout=DEFAULT_TIMEOUT
-        )
+        async with connection.device(
+            DeviceType.ECOMAX, timeout=DEFAULT_TIMEOUT
+        ) as device:
+            product = cast(
+                ProductInfo, await device.get(ATTR_PRODUCT, timeout=DEFAULT_TIMEOUT)
+            )
+            self.device = device
 
         try:
             product_type = ProductType(product.type)
         except ValueError as validation_failure:
             raise UnsupportedProduct from validation_failure
 
-        self.init_info.update(
+        self._data.update(
             {
                 CONF_UID: product.uid,
                 CONF_MODEL: product.model,
@@ -335,11 +327,8 @@ class PlumEcomaxFlowHandler(ConfigFlow, domain=DOMAIN):
         )
         sub_devices = await async_get_sub_devices(device)
 
-        self.init_info.update(
-            {
-                CONF_SOFTWARE: asdict(modules),
-                CONF_SUB_DEVICES: sub_devices,
-            }
+        self._data.update(
+            {CONF_SOFTWARE: asdict(modules), CONF_SUB_DEVICES: sub_devices}
         )
 
     async def _async_set_unique_id(self, uid: str) -> None:
@@ -462,7 +451,7 @@ def _validate_entity_details(
     entity: dict[str, Any], platform: Platform
 ) -> dict[str, str]:
     """Validate entity details."""
-    errors = {}
+    errors: dict[str, str] = {}
 
     if platform in PLATFORM_UNITS:
         try:
@@ -510,11 +499,14 @@ def _is_valid_source(platform: Platform, value: Any) -> bool:
     if isinstance(value, bool):
         return True if bool in platform_types else False
 
+    if isinstance(value, float) and math.isnan(value):
+        return False
+
     return isinstance(value, platform_types)
 
 
 @overload
-def _format_source_value(value: Number) -> NumericType | str: ...
+def _format_source_value(value: Number) -> Numeric | str: ...
 
 
 @overload
@@ -522,12 +514,14 @@ def _format_source_value(value: Switch) -> State: ...
 
 
 @overload
-def _format_source_value[SensorValueT: str | int | float](
+def _format_source_value[SensorValueT: Numeric | str](
     value: SensorValueT,
 ) -> SensorValueT: ...
 
 
-def _format_source_value(value: Any) -> Any:
+def _format_source_value(
+    value: Number | Switch | Numeric | str,
+) -> State | Numeric | str:
     """Format the source value."""
     if isinstance(value, Number):
         unit = value.unit_of_measurement
@@ -540,7 +534,7 @@ def _format_source_value(value: Any) -> Any:
     elif isinstance(value, float):
         value = round(value, 2)
 
-        return value
+    return value
 
 
 def generate_select_schema(entities: dict[str, Any]) -> vol.Schema | None:
@@ -835,9 +829,14 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle rediscovering connected devices."""
-        self.hass.async_create_task(
-            async_rediscover_devices(self.hass, self.config_entry, self.connection)
-        )
+
+        async def _async_discover_devices() -> None:
+            """Fetch list of connected devices and update config entry."""
+            data = dict(self.config_entry.data)
+            data[CONF_SUB_DEVICES] = await async_get_sub_devices(self.connection.device)
+            self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+
+        self.config_entry.async_create_task(self.hass, _async_discover_devices())
         return self.async_create_entry(data=self.options)
 
     async def async_step_edit_entity(
@@ -897,7 +896,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
     ) -> dict[str, Any]:
         """Return source candidates for ecoMAX."""
         existing_keys = [
-            key for key in entity_keys if key.split("_", 1)[0] not in VIRTUAL_DEVICES
+            key for key in entity_keys if key.split("_", 1)[0] not in LOGICAL_DEVICES
         ]
         return {
             k: v
@@ -907,32 +906,36 @@ class OptionsFlowHandler(OptionsFlowWithReload):
 
     def _regdata_source_candidates(
         self, entity_keys: list[str], selected: str
-    ) -> dict[str, Any]:
+    ) -> dict[int, Any]:
         """Return source candidates for regdata."""
-        existing_keys = [key for key in entity_keys if key.isnumeric()]
+        existing_keys = [int(key) for key in entity_keys if key.isnumeric()]
         regdata = cast(
-            dict[str, Any], self.connection.device.get_nowait(ATTR_REGDATA, {})
+            dict[int, Any], self.connection.device.get_nowait(ATTR_REGDATA, {})
         )
         return {
-            k: v for k, v in regdata.items() if k not in existing_keys or k == selected
+            k: v
+            for k, v in regdata.items()
+            if k not in existing_keys or str(k) == selected
         }
 
-    def _virtual_device_source_candidates(
+    def _logical_device_source_candidates(
         self, entity_keys: list[str], selected: str
     ) -> dict[str, Any]:
-        """Return source candidates for virtual device."""
-        device_type, index = self.source_device.split("_", 1)
-        virtual_device = self._get_virtual_device(DeviceType(device_type), int(index))
+        """Return source candidates for logical device."""
+        device_type, device_id = self.source_device.split("_", 1)
+        device = self._get_logical_device(DeviceType(device_type), int(device_id))
         existing_keys = [
-            key for key in entity_keys if key.startswith(f"{device_type}-{index}")
+            key for key in entity_keys if key.startswith(f"{device_type}-{device_id}")
         ]
         return {
             k: v
-            for k, v in virtual_device.data.items()
+            for k, v in device.data.items()
             if k not in existing_keys or k == selected
         }
 
-    def _entity_source_candidates(self, selected: str) -> dict[str, Any]:
+    def _entity_source_candidates(
+        self, selected: str
+    ) -> dict[str, Any] | dict[int, Any]:
         """Return custom entity source candidates."""
         entity_keys = _entity_keys_for_config_entry(self.hass, self.config_entry)
 
@@ -942,8 +945,8 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         elif self.source_device == ATTR_REGDATA:
             return self._regdata_source_candidates(entity_keys, selected)
 
-        elif self.source_device.startswith(VIRTUAL_DEVICES):
-            return self._virtual_device_source_candidates(entity_keys, selected)
+        elif self.source_device.startswith(LOGICAL_DEVICES):
+            return self._logical_device_source_candidates(entity_keys, selected)
 
         raise HomeAssistantError(
             translation_key="unsupported_device",
@@ -951,19 +954,21 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         )
 
     @cache
-    def _get_virtual_device(self, device_type: DeviceType, index: int) -> VirtualDevice:
-        """Get the virtual device by device type and index."""
+    def _get_logical_device(
+        self, device_type: DeviceType, device_id: int
+    ) -> LogicalDevice:
+        """Get the logical device by device type and id."""
         device = self.connection.device
-        virtual_devices = cast(
-            dict[int, VirtualDevice], device.get_nowait(f"{device_type}s", {})
+        devices = cast(
+            dict[int, LogicalDevice], device.get_nowait(f"{device_type}s", {})
         )
 
         try:
-            return virtual_devices[index]
+            return devices[device_id]
         except KeyError as e:
             raise HomeAssistantError(
                 translation_key="device_disconnected",
-                translation_placeholders={"device": f"{device_type} {index}"},
+                translation_placeholders={"device": f"{device_type} {device_id}"},
             ) from e
 
     def _entity_source_select_options(
@@ -1011,15 +1016,12 @@ class OptionsFlowHandler(OptionsFlowWithReload):
         if self.source_device == DeviceType.ECOMAX:
             number = device.get_nowait(key, None)
 
-        elif self.source_device.startswith(VIRTUAL_DEVICES):
-            device_type, index = self.source_device.split("_", 1)
-            virtual_device = self._get_virtual_device(
-                DeviceType(device_type), int(index)
+        elif self.source_device.startswith(LOGICAL_DEVICES):
+            device_type, device_id = self.source_device.split("_", 1)
+            logical_device = self._get_logical_device(
+                DeviceType(device_type), int(device_id)
             )
-            number = virtual_device.get_nowait(key, None)
-
-        else:
-            number = None
+            number = logical_device.get_nowait(key, None)
 
         number = cast(Number | None, number)
         if not number:

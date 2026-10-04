@@ -14,8 +14,7 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from pyplumio.const import ATTR_CONNECTED
-from pyplumio.structures.mixer_sensors import ATTR_PUMP
-from pyplumio.structures.outputs import (
+from pyplumio.structures.sensor_data import (
     ATTR_CIRCULATION_PUMP,
     ATTR_FAN,
     ATTR_FAN2_EXHAUST,
@@ -23,12 +22,12 @@ from pyplumio.structures.outputs import (
     ATTR_FIREPLACE_PUMP,
     ATTR_HEATING_PUMP,
     ATTR_LIGHTER,
+    ATTR_PENDING_ALERTS,
+    ATTR_PUMP,
     ATTR_SOLAR_PUMP,
     ATTR_WATER_HEATER_PUMP,
 )
-from pyplumio.structures.pending_alerts import ATTR_PENDING_ALERTS
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.plum_ecomax.connection import EcomaxConnection
 from custom_components.plum_ecomax.const import ATTR_ENTITIES, ATTR_REGDATA
@@ -49,20 +48,12 @@ def bypass_async_migrate_entry():
         yield
 
 
-@pytest.fixture(autouse=True)
-def set_connected(connected):
-    """Assume connected."""
-
-
 @pytest.mark.usefixtures("ecomax_p")
 async def test_heating_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test heating pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     heating_pump_entity_id = "binary_sensor.ecomax_heating_pump"
 
     # Test entry.
@@ -87,13 +78,10 @@ async def test_heating_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p", "water_heater")
 async def test_water_heater_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test water heater pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     water_heater_pump_entity_id = "binary_sensor.ecomax_water_heater_pump"
 
     # Test entry.
@@ -118,13 +106,10 @@ async def test_water_heater_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_circulation_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test circulation pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     circulation_pump_entity_id = "binary_sensor.ecomax_circulation_pump"
 
     # Test entry.
@@ -149,13 +134,10 @@ async def test_circulation_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_alert_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test alert binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     alert_entity_id = "binary_sensor.ecomax_alert"
 
     # Test entry.
@@ -181,13 +163,10 @@ async def test_alert_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_connection_status_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test connection status binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     connection_status_entity_id = "binary_sensor.ecomax_connection_status"
 
     # Test entry.
@@ -213,13 +192,10 @@ async def test_connection_status_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_fan_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test fan binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     fan_entity_id = "binary_sensor.ecomax_fan"
 
     # Test entry.
@@ -244,13 +220,10 @@ async def test_fan_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_exhaust_fan_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test exhaust fan binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     exhaust_fan_entity_id = "binary_sensor.ecomax_exhaust_fan"
 
     # Test entry.
@@ -275,13 +248,10 @@ async def test_exhaust_fan_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_feeder_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test feeder binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     feeder_entity_id = "binary_sensor.ecomax_feeder"
 
     # Test entry.
@@ -305,13 +275,10 @@ async def test_feeder_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p")
 async def test_lighter_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test lighter binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     lighter_entity_id = "binary_sensor.ecomax_lighter"
 
     # Test entry.
@@ -336,13 +303,10 @@ async def test_lighter_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_i")
 async def test_solar_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test solar pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     solar_pump_entity_id = "binary_sensor.ecomax_solar_pump"
 
     # Test entry.
@@ -367,13 +331,10 @@ async def test_solar_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_i")
 async def test_fireplace_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test fireplace pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     fireplace_pump_entity_id = "binary_sensor.ecomax_fireplace_pump"
 
     # Test entry.
@@ -398,13 +359,10 @@ async def test_fireplace_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_p", "mixers")
 async def test_mixer_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test mixer pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     mixer_pump_entity_id = "binary_sensor.ecomax_mixer_1_mixer_pump"
 
     # Test entry.
@@ -429,13 +387,10 @@ async def test_mixer_pump_binary_sensor(
 
 @pytest.mark.usefixtures("ecomax_i", "mixers")
 async def test_circuit_pump_binary_sensor(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test mixer pump binary sensor."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     circuit_pump_entity_id = "binary_sensor.ecomax_circuit_1_circuit_pump"
 
     # Test entry.
@@ -490,14 +445,11 @@ async def test_custom_binary_sensors(
     friendly_name: str,
     hass: HomeAssistant,
     connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test custom binary sensors."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "custom_binary_sensor": {
@@ -508,7 +460,7 @@ async def test_custom_binary_sensors(
                     }
                 }
             }
-        },
+        }
     )
 
     # Test entry.
@@ -534,16 +486,11 @@ async def test_custom_binary_sensors(
 
 @pytest.mark.usefixtures("ecomax_p", "ecomax_860p3_o", "custom_fields")
 async def test_custom_regdata_binary_sensors(
-    hass: HomeAssistant,
-    connection: EcomaxConnection,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ):
     """Test custom regdata binary sensors."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "9000": {
@@ -554,7 +501,7 @@ async def test_custom_regdata_binary_sensors(
                     }
                 }
             }
-        },
+        }
     )
 
     entity_id = "binary_sensor.ecomax_test_custom_regdata_binary"

@@ -3,7 +3,7 @@
 from collections.abc import Generator
 from dataclasses import replace
 from typing import Any, Final, cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from homeassistant import config_entries
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -146,7 +146,8 @@ async def test_form_tcp(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=TcpConnection)
-    mock_connection.get = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     with patch(
@@ -246,7 +247,8 @@ async def test_form_serial(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=SerialConnection)
-    mock_connection.get = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     with patch(
@@ -309,7 +311,8 @@ async def test_abort_device_not_found(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=TcpConnection)
-    mock_connection.get = AsyncMock(side_effect=TimeoutError)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(side_effect=TimeoutError)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     with patch(
@@ -348,12 +351,13 @@ async def test_abort_unsupported_product(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=TcpConnection)
-    mock_connection.get = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     unknown_device_type = 2
-    ecomax_p.data["product"] = replace(
-        ecomax_p.data["product"], type=unknown_device_type
+    await ecomax_p.dispatch(
+        "product", replace(ecomax_p.data["product"], type=unknown_device_type)
     )
     with patch(
         "custom_components.plum_ecomax.config_flow.async_get_connection_handler",
@@ -391,7 +395,8 @@ async def test_abort_discovery_failed(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=TcpConnection)
-    mock_connection.get = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     with patch(
@@ -438,7 +443,8 @@ async def test_abort_already_configured(
 
     # Create the PyPlumIO connection mock.
     mock_connection = Mock(spec=TcpConnection)
-    mock_connection.get = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aenter__ = AsyncMock(return_value=ecomax_p)
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
 
     # Identify the device.
     with patch(
@@ -810,10 +816,10 @@ async def test_add_entity(
     expected_errors: dict[str, str] | None,
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test adding an entity to an existing config entry."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the add entity form.
@@ -838,6 +844,17 @@ async def test_add_entity(
     assert result4["type"] is FlowResultType.FORM
     assert result4["step_id"] == "entity_details"
 
+    if source_device == ATTR_REGDATA:
+        # Test regdata sort.
+        assert result4["data_schema"]
+        select_config: dict[str, Any] = result4["data_schema"].schema["key"].config
+        options: list[dict[str, str]] = select_config["options"]
+        keys = [int(option["value"]) for option in options]
+        assert keys == sorted(keys)
+
+        # Test regdata NaN filter.
+        assert 225 not in keys
+
     # Add the entity.
     result5 = await hass.config_entries.options.async_configure(
         result4["flow_id"], user_input
@@ -852,10 +869,10 @@ async def test_add_entity(
 
 @pytest.mark.usefixtures("ecomax_860p3_o", "mixers")
 async def test_add_entity_with_disconnected_mixer(
-    hass: HomeAssistant, config_entry: MockConfigEntry, setup_integration, connection
+    hass: HomeAssistant, config_entry: MockConfigEntry, setup_config_entry, connection
 ) -> None:
     """Test adding an entity when mixer is disconnected after device selection."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the add entity form.
@@ -882,10 +899,10 @@ async def test_add_entity_with_disconnected_mixer(
 
 @pytest.mark.usefixtures("ecomax_860p3_o", "custom_fields")
 async def test_add_entity_with_missing_number(
-    hass: HomeAssistant, config_entry: MockConfigEntry, setup_integration, connection
+    hass: HomeAssistant, config_entry: MockConfigEntry, setup_config_entry, connection
 ) -> None:
     """Test adding an entity when mixer is disconnected after device selection."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the add entity form.
@@ -903,10 +920,14 @@ async def test_add_entity_with_missing_number(
         result3["flow_id"], user_input={"next_step_id": "add_number"}
     )
 
-    del connection.device.data["custom_number"]
+    ecomax_data = dict(connection.device.data)
+    del ecomax_data["custom_number"]
 
     # Expect error on adding the entity if selected number is missing.
-    with pytest.raises(HomeAssistantError) as exc_info:
+    with (
+        patch("pyplumio.devices.ecomax.EcoMAX.data", ecomax_data),
+        pytest.raises(HomeAssistantError) as exc_info,
+    ):
         await hass.config_entries.options.async_configure(
             result4["flow_id"],
             {
@@ -928,16 +949,11 @@ async def test_add_entity_with_missing_number(
 @pytest.mark.parametrize("key", ("heating_pump", "custom_binary_sensor"))
 @pytest.mark.usefixtures("connection", "ecomax_860p3_o", "custom_fields")
 async def test_add_entity_with_colliding_key(
-    key: str,
-    hass: HomeAssistant,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    key: str, hass: HomeAssistant, config_entry: MockConfigEntry, setup_config_entry
 ) -> None:
     """Test raising an error on key collision."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "custom_binary_sensor": {
@@ -948,7 +964,7 @@ async def test_add_entity_with_colliding_key(
                     }
                 }
             }
-        },
+        }
     )
     result = await setup_options_flow(hass, config_entry)
 
@@ -985,10 +1001,10 @@ async def test_add_entity_with_colliding_key(
 async def test_abort_no_entities_to_add(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test aborting add entity when there are no entities to add."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the add entity form.
@@ -1135,14 +1151,10 @@ async def test_edit_entity(
     expected_data: dict[str, Any],
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test editing an existing entity in a config entry."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={ATTR_ENTITIES: {platform: entity_details}},
-    )
+    await setup_config_entry({ATTR_ENTITIES: {platform: entity_details}})
     result = await setup_options_flow(hass, config_entry)
 
     # Get the entity select form.
@@ -1170,13 +1182,11 @@ async def test_edit_entity(
 
 @pytest.mark.usefixtures("connection", "ecomax_860p3_o", "custom_fields")
 async def test_edit_entity_with_invalid_source_device(
-    hass: HomeAssistant, config_entry: MockConfigEntry, setup_integration
+    hass: HomeAssistant, config_entry: MockConfigEntry, setup_config_entry
 ) -> None:
     """Test editing an existing entity in a config entry."""
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "custom_binary_sensor": {
@@ -1187,7 +1197,7 @@ async def test_edit_entity_with_invalid_source_device(
                     }
                 }
             }
-        },
+        }
     )
     result = await setup_options_flow(hass, config_entry)
 
@@ -1211,10 +1221,10 @@ async def test_edit_entity_with_invalid_source_device(
 async def test_abort_no_entities_to_edit(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test aborting edit entity when there are no entities to edit."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the entity select form.
@@ -1227,9 +1237,7 @@ async def test_abort_no_entities_to_edit(
 
 @pytest.mark.usefixtures("connection", "ecomax_860p3_o")
 async def test_remove_entity(
-    hass: HomeAssistant,
-    config_entry: MockConfigEntry,
-    setup_integration,
+    hass: HomeAssistant, config_entry: MockConfigEntry, setup_config_entry
 ) -> None:
     """Test removing an existing entity from the config entry."""
     custom_sensor = {
@@ -1244,10 +1252,8 @@ async def test_remove_entity(
         }
     }
 
-    await setup_integration(
-        hass,
-        config_entry,
-        options={
+    await setup_config_entry(
+        {
             ATTR_ENTITIES: {
                 Platform.BINARY_SENSOR: {
                     "custom_binary_sensor": {
@@ -1259,7 +1265,7 @@ async def test_remove_entity(
                 },
                 Platform.SENSOR: custom_sensor,
             }
-        },
+        }
     )
     await hass.async_block_till_done()
     result = await setup_options_flow(hass, config_entry)
@@ -1291,10 +1297,10 @@ async def test_remove_entity(
 async def test_abort_no_entities_to_remove(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
 ) -> None:
     """Test aborting remove entity when there are no entities to remove."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
     # Get the entity select form.
@@ -1305,32 +1311,31 @@ async def test_abort_no_entities_to_remove(
     assert result2["reason"] == "no_entities_to_edit_or_remove"
 
 
-@patch(
-    "custom_components.plum_ecomax.config_flow.async_rediscover_devices",
-    new_callable=Mock,
-)
-@patch("homeassistant.core.HomeAssistant.async_create_task")
-@pytest.mark.usefixtures("ecomax_860p3_o", "bypass_async_setup_entry")
+@patch("custom_components.plum_ecomax.config_flow.async_get_sub_devices")
+@patch("homeassistant.config_entries.ConfigEntries.async_update_entry")
+@patch("homeassistant.config_entries.ConfigEntries.async_reload")
+@pytest.mark.usefixtures("connection", "ecomax_860p3_o", "bypass_async_setup_entry")
 async def test_rediscover_devices(
-    mock_async_create_task,
-    mock_async_rediscover_devices,
+    mock_async_reload,
+    mock_async_update_entry,
+    mock_async_get_sub_devices,
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    setup_integration,
+    setup_config_entry,
     connection,
 ) -> None:
     """Test rediscovering devices for the config entry."""
-    await setup_integration(hass, config_entry)
+    await setup_config_entry()
     result = await setup_options_flow(hass, config_entry)
 
-    # Reload the config.
+    # Rediscover devices.
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={"next_step_id": "rediscover_devices"}
     )
     assert result2["type"] is FlowResultType.CREATE_ENTRY
-    mock_async_rediscover_devices.assert_called_once_with(
-        hass, config_entry, connection
-    )
-    mock_async_create_task.assert_called_once_with(
-        mock_async_rediscover_devices.return_value
-    )
+
+    mock_async_get_sub_devices.assert_awaited_once_with(connection.device)
+    expected_data = dict(config_entry.data)
+    expected_data[CONF_SUB_DEVICES] = mock_async_get_sub_devices.return_value
+    mock_async_update_entry.assert_has_calls([call(config_entry, data=expected_data)])
+    mock_async_reload.assert_awaited_once_with(config_entry.entry_id)

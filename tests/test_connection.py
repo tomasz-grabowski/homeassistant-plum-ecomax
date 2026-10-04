@@ -1,10 +1,10 @@
 """Test Plum ecoMAX connection."""
 
+from functools import partial
 import logging
-from typing import Any, Final
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
-from homeassistant.components.network.const import IPV4_BROADCAST_ADDR
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -23,6 +23,7 @@ from custom_components.plum_ecomax.connection import (
     EcomaxConnection,
     async_get_connection_handler,
     async_get_sub_devices,
+    async_resolve_host_name,
 )
 from custom_components.plum_ecomax.const import (
     ATTR_MIXERS,
@@ -40,40 +41,46 @@ from custom_components.plum_ecomax.const import (
     DeviceType,
 )
 
-SOURCE_IP: Final = "1.1.1.1"
+
+@pytest.mark.parametrize(
+    ("host", "ip"), (("example.com", "8.8.8.8"), ("8.8.8.8", "8.8.8.8"))
+)
+@patch("aiohttp.resolver.AsyncResolver.resolve")
+@patch("aiohttp.resolver.AsyncResolver.close")
+async def test_async_resolve_host_name(
+    mock_close, mock_resolve, host: str, ip: str, hass: HomeAssistant
+) -> None:
+    """Test resolving a host name."""
+    mock_resolve.side_effect = ([{CONF_HOST: ip}], None)
+    result = await async_resolve_host_name(hass, host)
+    assert result == ip
+    mock_resolve.assert_awaited_once_with(host)
+    mock_close.assert_awaited_once()
+    result2 = await async_resolve_host_name(hass, host)
+    assert result2 is None
 
 
-@pytest.fixture(name="async_get_source_ip")
-def fixture_async_get_source_ip():
-    """Mock async get source ip."""
-    with patch(
-        "custom_components.plum_ecomax.connection.async_get_source_ip",
-        return_value=SOURCE_IP,
-    ) as async_get_source_ip:
-        yield async_get_source_ip
-
-
+@pytest.mark.parametrize(
+    ("connection_type", "connection_cls"),
+    (
+        (CONNECTION_TYPE_TCP, TcpConnection),
+        (CONNECTION_TYPE_SERIAL, SerialConnection),
+    ),
+)
 async def test_async_get_connection_handler(
-    hass: HomeAssistant,
+    connection_type: str,
+    connection_cls: type[Connection],
     tcp_config_data: dict[str, Any],
     serial_config_data: dict[str, Any],
-    async_get_source_ip,
 ) -> None:
     """Test helper function to get connection handler."""
-    with patch("pyplumio.EthernetParameters") as mock_ethernet_parameters:
-        connection: Connection = await async_get_connection_handler(
-            CONNECTION_TYPE_TCP, hass, tcp_config_data
-        )
+    connection_partial = partial(async_get_connection_handler, connection_type)
+    if connection_type == CONNECTION_TYPE_TCP:
+        connection = await connection_partial(tcp_config_data)
+    else:
+        connection = await connection_partial(serial_config_data)
 
-    assert isinstance(connection, TcpConnection)
-    async_get_source_ip.assert_awaited_once_with(hass, target_ip=IPV4_BROADCAST_ADDR)
-    mock_ethernet_parameters.assert_called_once_with(ip=SOURCE_IP)
-
-    # Test with serial connection.
-    connection = await async_get_connection_handler(
-        CONNECTION_TYPE_SERIAL, hass, serial_config_data
-    )
-    assert isinstance(connection, SerialConnection)
+    assert isinstance(connection, connection_cls)
 
 
 @pytest.mark.usefixtures("mixers", "thermostats", "water_heater")
@@ -98,11 +105,14 @@ async def test_async_setup(
     tcp_config_data: dict[str, Any],
 ) -> None:
     """Test connection setup."""
-    mock_ecomax = Mock(spec=EcoMAX)
+    mock_ecomax = AsyncMock(spec=EcoMAX)
     mock_ecomax.wait_for = AsyncMock(side_effect=(True, True, True, TimeoutError))
     mock_connection = Mock(spec=TcpConnection)
     mock_connection.configure_mock(host=tcp_config_data.get(CONF_HOST))
-    mock_connection.get = AsyncMock(side_effect=(mock_ecomax, TimeoutError))
+    mock_connection.device.return_value.__aenter__ = AsyncMock(
+        side_effect=(mock_ecomax, TimeoutError)
+    )
+    mock_connection.device.return_value.__aexit__ = AsyncMock()
     connection = EcomaxConnection(hass, config_entry, mock_connection)
 
     # Test config not ready when device property is not set.
@@ -113,7 +123,7 @@ async def test_async_setup(
     assert exc_info.value.translation_placeholders == {"device": "ecoMAX 850P2-C"}
     await connection.async_setup()
     mock_connection.connect.assert_awaited_once()
-    mock_connection.get.assert_awaited_once_with(
+    mock_connection.device.assert_called_once_with(
         DeviceType.ECOMAX, timeout=WAIT_FOR_DEVICE_SECONDS
     )
 

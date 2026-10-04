@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import logging
-from typing import Final
+from typing import Final, cast
 
+from homeassistant.components.network import async_get_source_ip
+from homeassistant.components.network.const import IPV4_BROADCAST_ADDR
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_CODE,
@@ -17,7 +19,9 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers.typing import ConfigType
+from pyplumio import AsyncProtocol
 from pyplumio.filters import custom, delta
 from pyplumio.structures.alerts import ATTR_ALERTS, Alert
 
@@ -26,6 +30,7 @@ from .connection import (
     EcomaxConnection,
     async_get_connection_handler,
     async_get_sub_devices,
+    async_resolve_host_name,
 )
 from .const import (
     ATTR_FROM,
@@ -34,14 +39,18 @@ from .const import (
     ATTR_TO,
     CONF_CAPABILITIES,
     CONF_CONNECTION_TYPE,
+    CONF_HOST,
     CONF_PRODUCT_ID,
     CONF_PRODUCT_TYPE,
     CONF_SOFTWARE,
     CONF_SUB_DEVICES,
+    CONNECTION_TYPE_TCP,
     DEFAULT_CONNECTION_TYPE,
     DOMAIN,
     EVENT_PLUM_ECOMAX_ALERT,
+    MANUFACTURER,
     DeviceType,
+    ModuleType,
 )
 from .services import async_setup_services
 
@@ -57,6 +66,8 @@ PLATFORMS: list[Platform] = [
 
 DATE_STR_FORMAT: Final = "%Y-%m-%d %H:%M:%S"
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 _LOGGER = logging.getLogger(__name__)
 
 type PlumEcomaxConfigEntry = ConfigEntry["PlumEcomaxData"]
@@ -69,10 +80,16 @@ class PlumEcomaxData:
     connection: EcomaxConnection
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the Plum ecoMAX component."""
+    async_setup_services(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: PlumEcomaxConfigEntry) -> bool:
     """Set up the Plum ecoMAX from a config entry."""
     connection_type = entry.data.get(CONF_CONNECTION_TYPE, DEFAULT_CONNECTION_TYPE)
-    handler = await async_get_connection_handler(connection_type, hass, entry.data)
+    handler = await async_get_connection_handler(connection_type, entry.data)
     connection = EcomaxConnection(hass, entry, connection=handler)
 
     try:
@@ -86,8 +103,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: PlumEcomaxConfigEntry) -
         ) from e
 
     entry.runtime_data = PlumEcomaxData(connection)
-    async_setup_services(hass, connection)
-    async_setup_events(hass, connection)
+
+    async def _async_update_network_info() -> None:
+        """Update network info on the controller screen."""
+        if connection_type == CONNECTION_TYPE_TCP:
+            # Get RS485 to TCP converter IP address.
+            server_ip = await async_resolve_host_name(hass, host=entry.data[CONF_HOST])
+        else:
+            # Get HA own IP address when connected via serial.
+            server_ip = await async_get_source_ip(hass, target_ip=IPV4_BROADCAST_ADDR)
+
+        if not server_ip:
+            _LOGGER.debug("Could not resolve server IP for network info")
+            return
+
+        protocol = cast(AsyncProtocol, handler.protocol)
+        ethernet_parameters = protocol.network_info.ethernet
+        protocol.network_info.ethernet = replace(
+            ethernet_parameters, ip=server_ip, status=True
+        )
+        _LOGGER.debug("Sent server IP to the remote controller: %s", server_ip)
+
+    entry.async_create_background_task(
+        hass, _async_update_network_info(), name="update_network_info"
+    )
 
     async def _async_close_connection(event: Event | None = None) -> None:
         """Close the ecoMAX connection on HA Stop."""
@@ -97,18 +136,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: PlumEcomaxConfigEntry) -
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_close_connection)
     )
 
+    # Ensure that ecoMAX controller device exists in config entry.
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        configuration_url=(
+            f"http://{entry.data[CONF_HOST]}"
+            if connection_type == CONNECTION_TYPE_TCP
+            else None
+        ),
+        identifiers={(DOMAIN, connection.uid)},
+        manufacturer=MANUFACTURER,
+        model=connection.model,
+        name=connection.name,
+        serial_number=connection.uid,
+        sw_version=connection.software.get(ModuleType.A),
+    )
+
+    async_setup_events(hass, connection)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
-
-async def async_rediscover_devices(
-    hass: HomeAssistant, entry: ConfigEntry, connection: EcomaxConnection
-) -> None:
-    """Reload config on update."""
-    data = dict(entry.data)
-    data[CONF_SUB_DEVICES] = await async_get_sub_devices(connection.device)
-    hass.config_entries.async_update_entry(entry, data=data)
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 @callback
@@ -158,7 +205,7 @@ async def async_migrate_entry(
     _LOGGER.debug("Migrating from version %s", entry.version)
 
     connection_type = entry.data.get(CONF_CONNECTION_TYPE, DEFAULT_CONNECTION_TYPE)
-    handler = await async_get_connection_handler(connection_type, hass, entry.data)
+    handler = await async_get_connection_handler(connection_type, entry.data)
     connection = EcomaxConnection(hass, entry, connection=handler)
     await connection.connect()
     data = dict(entry.data)
@@ -172,14 +219,14 @@ async def async_migrate_entry(
             data[CONF_PRODUCT_TYPE] = product.type
 
         if entry.version < 5:
-            # Capabilities got removed to sub_devices in version 5.
+            # Capabilities key was renamed to sub_devices in version 5.
             with suppress(KeyError):
                 del data[CONF_CAPABILITIES]
 
             data[CONF_SUB_DEVICES] = await async_get_sub_devices(device)
 
         if entry.version < 7:
-            # Product id were added in version 7.
+            # Product id was added in version 7.
             product = await device.get(ATTR_PRODUCT, timeout=DEFAULT_TIMEOUT)
             data[CONF_PRODUCT_ID] = product.id
 
