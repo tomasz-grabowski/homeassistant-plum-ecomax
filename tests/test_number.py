@@ -1,6 +1,8 @@
 """Test the number platform."""
 
+import json
 from math import isclose
+from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
@@ -10,6 +12,7 @@ from homeassistant.components.number import (
     ATTR_MODE,
     ATTR_STEP,
     ATTR_VALUE,
+    DEVICE_CLASS_UNITS,
     DOMAIN,
     SERVICE_SET_VALUE,
     NumberDeviceClass,
@@ -25,6 +28,8 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     Platform,
     UnitOfMass,
+    UnitOfPower,
+    UnitOfPressure,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -35,9 +40,11 @@ from pyplumio.const import ProductType
 from pyplumio.devices.ecomax import EcoMAX
 from pyplumio.parameters import NumberDescription, ParameterDescription, ParameterValues
 from pyplumio.parameters.ecomax import (
+    EXTENDED_PARAMETER_TYPES,
     PARAMETER_TYPES as ECOMAX_PARAMETER_TYPES,
     EcomaxNumber,
     EcomaxNumberDescription,
+    get_ecomax_extended_parameter_types,
 )
 from pyplumio.parameters.mixer import (
     PARAMETER_TYPES as MIXER_PARAMETER_TYPES,
@@ -47,13 +54,19 @@ from pyplumio.parameters.mixer import (
 import pytest
 
 from custom_components.plum_ecomax.connection import EcomaxConnection
-from custom_components.plum_ecomax.const import ATTR_ENTITIES
+from custom_components.plum_ecomax.const import (
+    ATTR_CONTROL_MODE,
+    ATTR_ENTITIES,
+    DOMAIN as PLUM_ECOMAX_DOMAIN,
+    EXTENDED_PARAMETER_REPLACEMENTS,
+)
 from custom_components.plum_ecomax.number import (
     MIXER_NUMBER_TYPES,
     NUMBER_TYPES,
     EcomaxNumberEntityDescription,
+    async_make_extended_number_description,
 )
-from tests.conftest import FLOAT_TOLERANCE, dispatch_value
+from tests.conftest import ECOMAX_860P4_MODEL, FLOAT_TOLERANCE, dispatch_value
 
 
 @pytest.fixture(autouse=True)
@@ -1160,7 +1173,6 @@ ECOMAX_P_CONFIG_NUMBERS: tuple[tuple[str, str], ...] = (
     ("fuzzy_logic_oxygen_correction", "number.ecomax_fuzzy_logic_oxygen_correction"),
     ("max_fuel_flow", "number.ecomax_feeder_capacity"),
     ("feeder_calibration", "number.ecomax_feeder_calibration"),
-    ("fuel_tank_capacity", "number.ecomax_fuel_tank_capacity"),
     ("fuel_detection_time", "number.ecomax_no_fuel_detection_time"),
     ("fuel_detection_exhaust_temp", "number.ecomax_no_fuel_exhaust_temperature"),
     ("feed2_h1", "number.ecomax_feeder_2_h1"),
@@ -1374,3 +1386,202 @@ async def test_config_number(
     mock_set_nowait.assert_called_once_with(key, new_state.max_value)
     assert isinstance(state, State)
     assert isclose(float(state.state), native_max_value, rel_tol=FLOAT_TOLERANCE)
+
+
+EXTENDED_NUMBER_KEYS: tuple[str, ...] = tuple(
+    description.name
+    for description in EXTENDED_PARAMETER_TYPES[(41, ECOMAX_860P4_MODEL)].values()
+    if description.name != ATTR_CONTROL_MODE
+)
+
+REPLACED_NUMBER_KEYS: tuple[str, ...] = tuple(
+    key
+    for key in EXTENDED_PARAMETER_REPLACEMENTS
+    if key in {description.key for description in NUMBER_TYPES}
+)
+
+
+def get_number_entity_id(hass: HomeAssistant, key: str) -> str | None:
+    """Return the number entity id by the key."""
+    entity_registry = er.async_get(hass)
+    return entity_registry.async_get_entity_id(
+        Platform.NUMBER, PLUM_ECOMAX_DOMAIN, f"TEST-{key}"
+    )
+
+
+def test_extended_numbers_table_is_complete() -> None:
+    """Test that every extended number has a valid unit and a name."""
+    strings = json.loads(
+        (
+            Path(__file__).parents[1] / "custom_components/plum_ecomax/strings.json"
+        ).read_text(encoding="utf-8")
+    )
+    for parameter in EXTENDED_PARAMETER_TYPES[(41, ECOMAX_860P4_MODEL)].values():
+        if parameter.name == ATTR_CONTROL_MODE:
+            continue
+
+        description = async_make_extended_number_description(parameter)
+        if description.device_class:
+            assert (
+                description.native_unit_of_measurement
+                in DEVICE_CLASS_UNITS[description.device_class]
+            ), parameter.name
+
+        assert parameter.name in strings["entity"]["number"]
+
+
+@pytest.mark.usefixtures("ecomax_p", "extended_parameters")
+async def test_extended_numbers(hass: HomeAssistant, setup_config_entry) -> None:
+    """Test that extended numbers replace legacy numbers for ecoMAX 860P4."""
+    await setup_config_entry()
+    assert_legacy_numbers(hass, extended=True)
+    entity_registry = er.async_get(hass)
+    assert len(EXTENDED_NUMBER_KEYS) == 56
+    for key in EXTENDED_NUMBER_KEYS:
+        entity_id = get_number_entity_id(hass, key)
+        assert entity_id, key
+        entry = entity_registry.async_get(entity_id)
+        assert entry
+        assert entry.translation_key == key
+        assert entry.entity_category == EntityCategory.CONFIG
+        assert entry.disabled_by is None
+        state = hass.states.get(entity_id)
+        assert isinstance(state, State)
+        assert state.attributes[ATTR_MODE] == NumberMode.BOX
+
+    assert not get_number_entity_id(hass, ATTR_CONTROL_MODE)
+
+
+@pytest.mark.parametrize(
+    (
+        "key",
+        "entity_id",
+        "expected_state",
+        "unit_of_measurement",
+        "device_class",
+        "new_value",
+    ),
+    (
+        (
+            "fan_speed_100",
+            "number.ecomax_fan_speed_100",
+            (1700, 1360, 2850, 10),
+            REVOLUTIONS_PER_MINUTE,
+            None,
+            1500,
+        ),
+        (
+            "draft_100",
+            "number.ecomax_draft_100",
+            (19, 15, 255, 1),
+            UnitOfPressure.PA,
+            NumberDeviceClass.PRESSURE,
+            20,
+        ),
+        (
+            "supervision_boiler_output",
+            "number.ecomax_supervision_boiler_output",
+            (2.8, 0.2, 51.0, 0.2),
+            UnitOfPower.KILO_WATT,
+            NumberDeviceClass.POWER,
+            3.2,
+        ),
+        (
+            "draft_correction",
+            "number.ecomax_draft_measurement_correction",
+            (1, -100, 100, 1),
+            UnitOfPressure.PA,
+            NumberDeviceClass.PRESSURE,
+            -5,
+        ),
+        (
+            "hopper_capacity",
+            "number.ecomax_hopper_capacity",
+            (90, 5, 1275, 5),
+            UnitOfMass.KILOGRAMS,
+            NumberDeviceClass.WEIGHT,
+            95,
+        ),
+        (
+            "kindling_temp_delta",
+            "number.ecomax_kindling_temperature_delta",
+            (5.0, 0.1, 6.0, 0.1),
+            UnitOfTemperature.CELSIUS,
+            NumberDeviceClass.TEMPERATURE_DELTA,
+            4.5,
+        ),
+    ),
+)
+@pytest.mark.usefixtures("ecomax_p", "extended_parameters")
+async def test_extended_number(
+    key: str,
+    entity_id: str,
+    expected_state: tuple[float, float, float, float],
+    unit_of_measurement: str,
+    device_class: NumberDeviceClass | None,
+    new_value: float,
+    hass: HomeAssistant,
+    setup_config_entry,
+    async_set_value,
+) -> None:
+    """Test ecoMAX 860P4 extended numbers."""
+    await setup_config_entry()
+    assert get_number_entity_id(hass, key) == entity_id
+
+    # Get initial state.
+    state = hass.states.get(entity_id)
+    assert isinstance(state, State)
+    value, min_value, max_value, step = expected_state
+    assert isclose(float(state.state), value, rel_tol=FLOAT_TOLERANCE)
+    assert isclose(state.attributes[ATTR_MIN], min_value, rel_tol=FLOAT_TOLERANCE)
+    assert isclose(state.attributes[ATTR_MAX], max_value, rel_tol=FLOAT_TOLERANCE)
+    assert isclose(state.attributes[ATTR_STEP], step, rel_tol=FLOAT_TOLERANCE)
+    assert state.attributes[ATTR_UNIT_OF_MEASUREMENT] == unit_of_measurement
+    assert state.attributes.get(ATTR_DEVICE_CLASS) == device_class
+
+    # Set new state.
+    with patch("pyplumio.devices.Device.set_nowait") as mock_set_nowait:
+        state = await async_set_value(hass, entity_id, new_value)
+
+    mock_set_nowait.assert_called_once_with(key, new_value)
+    assert isinstance(state, State)
+    assert isclose(float(state.state), new_value, rel_tol=FLOAT_TOLERANCE)
+
+
+def assert_legacy_numbers(hass: HomeAssistant, extended: bool) -> None:
+    """Assert that legacy numbers are replaced only by extended numbers."""
+    assert len(REPLACED_NUMBER_KEYS) == 19
+    for key in REPLACED_NUMBER_KEYS:
+        assert bool(get_number_entity_id(hass, key)) is not extended, key
+
+    for key in EXTENDED_NUMBER_KEYS:
+        assert bool(get_number_entity_id(hass, key)) is extended, key
+
+    # Legacy numbers without the extended replacement are kept.
+    assert get_number_entity_id(hass, "kindling_airflow_power")
+    assert get_number_entity_id(hass, "stabilization_airflow_power")
+
+
+@pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")
+async def test_legacy_numbers_without_extended_parameters(
+    hass: HomeAssistant, setup_config_entry
+) -> None:
+    """Test that legacy numbers are kept when extended table never arrives."""
+    with patch(
+        "custom_components.plum_ecomax.connection.get_ecomax_extended_parameter_types",
+        wraps=get_ecomax_extended_parameter_types,
+    ) as mock_get_types:
+        await setup_config_entry()
+
+    mock_get_types.assert_called_once()
+    assert_legacy_numbers(hass, extended=False)
+
+
+@pytest.mark.parametrize("product", ("ecomax_p", "ecomax_860p3_o"), indirect=True)
+@pytest.mark.usefixtures("product")
+async def test_legacy_numbers_for_other_products(
+    hass: HomeAssistant, setup_config_entry
+) -> None:
+    """Test that legacy numbers are unchanged for other products."""
+    await setup_config_entry()
+    assert_legacy_numbers(hass, extended=False)

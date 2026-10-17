@@ -24,18 +24,20 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pyplumio.const import ProductType
-from pyplumio.parameters import Parameter
+from pyplumio.const import ProductType, UnitOfMeasurement
+from pyplumio.parameters import NumberDescription, Parameter
+from pyplumio.parameters.ecomax import get_ecomax_extended_parameter_types
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
-from .const import FLOW_KG_H, DeviceType
+from .const import ATTR_CONTROL_MODE, ATTR_PRODUCT, FLOW_KG_H, DeviceType
 from .entity import (
     EcomaxEntity,
     EcomaxEntityDescription,
     MixerEntity,
     SubdeviceEntityDescription,
     ThermostatEntity,
+    async_get_by_extended_parameters,
     async_get_by_index,
     async_get_by_modules,
     async_get_by_product_type,
@@ -862,16 +864,6 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
         translation_key="feeder_calibration",
     ),
     EcomaxNumberEntityDescription(
-        key="fuel_tank_capacity",
-        device_class=NumberDeviceClass.WEIGHT,
-        entity_category=EntityCategory.CONFIG,
-        mode=NumberMode.BOX,
-        native_step=50.0,
-        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
-        product_types={ProductType.ECOMAX_P},
-        translation_key="fuel_tank_capacity",
-    ),
-    EcomaxNumberEntityDescription(
         key="fuel_detection_time",
         device_class=NumberDeviceClass.DURATION,
         entity_category=EntityCategory.CONFIG,
@@ -1196,6 +1188,23 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     ),
 )
 
+# Device classes of the extended parameters by unit of measurement.
+EXTENDED_NUMBER_DEVICE_CLASSES: dict[
+    UnitOfMeasurement | str | None, NumberDeviceClass
+] = {
+    UnitOfMeasurement.CELSIUS: NumberDeviceClass.TEMPERATURE,
+    UnitOfMeasurement.KILO_WATT: NumberDeviceClass.POWER,
+    UnitOfMeasurement.KILOGRAMS: NumberDeviceClass.WEIGHT,
+    UnitOfMeasurement.MINUTES: NumberDeviceClass.DURATION,
+    UnitOfMeasurement.PASCAL: NumberDeviceClass.PRESSURE,
+    UnitOfMeasurement.SECONDS: NumberDeviceClass.DURATION,
+}
+
+EXTENDED_TEMPERATURE_DELTAS: set[str] = {
+    "burning_off_detection_delta_temp",
+    "kindling_temp_delta",
+}
+
 
 class EcomaxNumber(EcomaxEntity, NumberEntity):
     """Represents an ecoMAX number."""
@@ -1237,10 +1246,48 @@ def async_setup_ecomax_numbers(connection: EcomaxConnection) -> list[EcomaxNumbe
     """Set up the ecoMAX numbers."""
     return [
         EcomaxNumber(connection, description)
-        for description in async_get_by_modules(
-            connection.device.modules,
-            async_get_by_product_type(connection.product_type, NUMBER_TYPES),
+        for description in async_get_by_extended_parameters(
+            connection.device.data,
+            async_get_by_modules(
+                connection.device.modules,
+                async_get_by_product_type(connection.product_type, NUMBER_TYPES),
+            ),
         )
+    ]
+
+
+@callback
+def async_make_extended_number_description(
+    description: NumberDescription,
+) -> EcomaxNumberEntityDescription:
+    """Make number description from the extended parameter description."""
+    unit = description.unit_of_measurement
+    device_class = EXTENDED_NUMBER_DEVICE_CLASSES.get(unit)
+    if description.name in EXTENDED_TEMPERATURE_DELTAS:
+        device_class = NumberDeviceClass.TEMPERATURE_DELTA
+
+    return EcomaxNumberEntityDescription(
+        key=description.name,
+        device_class=device_class,
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
+        native_step=description.step,
+        native_unit_of_measurement=(
+            unit.value if isinstance(unit, UnitOfMeasurement) else unit
+        ),
+        translation_key=description.name,
+    )
+
+
+@callback
+def async_setup_extended_numbers(connection: EcomaxConnection) -> list[EcomaxNumber]:
+    """Set up the ecoMAX extended numbers."""
+    device = connection.device
+    parameter_types = get_ecomax_extended_parameter_types(device.data[ATTR_PRODUCT])
+    return [
+        EcomaxNumber(connection, async_make_extended_number_description(description))
+        for description in parameter_types.values()
+        if description.name != ATTR_CONTROL_MODE and description.name in device.data
     ]
 
 
@@ -1486,7 +1533,12 @@ async def async_setup_entry(
     _LOGGER.debug("Starting setup of number platform...")
 
     connection = entry.runtime_data.connection
+    extended_parameters = await connection.async_setup_extended_parameters()
     entities = async_setup_ecomax_numbers(connection)
+
+    # Add ecoMAX extended numbers.
+    if extended_parameters:
+        entities += async_setup_extended_numbers(connection)
 
     # Add custom ecoMAX numbers.
     entities += async_setup_custom_ecomax_numbers(connection, entry)
