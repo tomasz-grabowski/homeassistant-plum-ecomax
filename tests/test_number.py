@@ -1085,6 +1085,11 @@ async def test_custom_numbers(
 # Configuration numbers (ecoMAX P service parameters), as (key, entity_id).
 # Translation keys of these entities are equal to their keys.
 ECOMAX_P_CONFIG_NUMBERS: tuple[tuple[str, str], ...] = (
+    ("heating_hysteresis", "number.ecomax_heating_hysteresis"),
+    ("h1_hysteresis", "number.ecomax_h1_hysteresis"),
+    ("h2_hysteresis", "number.ecomax_h2_hysteresis"),
+    ("heating_pump_enable_temp", "number.ecomax_heating_pump_enable_temperature"),
+    ("water_heater_hysteresis", "number.ecomax_water_heater_hysteresis"),
     ("airflow_power_100", "number.ecomax_airflow_power_100"),
     ("airflow_power_50", "number.ecomax_airflow_power_50"),
     ("airflow_power_30", "number.ecomax_airflow_power_30"),
@@ -1228,31 +1233,6 @@ MIXER_CONFIG_NUMBERS: tuple[tuple[str, str], ...] = (
     ("thermostat_mode", "number.ecomax_mixer_1_thermostat_selection"),
 )
 
-# Units that differ from pyplumio after checking the controller manual.
-UNIT_OVERRIDES: dict[str, str | None] = {
-    "airflow_power_100": REVOLUTIONS_PER_MINUTE,
-    "airflow_power_50": REVOLUTIONS_PER_MINUTE,
-    "airflow_power_30": REVOLUTIONS_PER_MINUTE,
-    "kindling_airflow_power": REVOLUTIONS_PER_MINUTE,
-    "stabilization_airflow_power": REVOLUTIONS_PER_MINUTE,
-    "supervision_airflow_power": REVOLUTIONS_PER_MINUTE,
-    "burning_off_airflow_power": REVOLUTIONS_PER_MINUTE,
-    "supervision_time": UnitOfTime.MINUTES,
-    "warming_up_time": UnitOfTime.SECONDS,
-}
-
-# Scale and offset from the device value to the native value.
-SCALE_OVERRIDES: dict[str, tuple[float, float]] = {
-    "airflow_power_100": (10, 300),
-    "airflow_power_50": (10, 300),
-    "airflow_power_30": (10, 300),
-    "kindling_airflow_power": (10, 300),
-    "stabilization_airflow_power": (10, 300),
-    "supervision_airflow_power": (10, 300),
-    "burning_off_airflow_power": (10, 300),
-    "warming_up_time": (2, 0),
-}
-
 ECOMAX_P_PARAMETERS: dict[str, ParameterDescription] = {
     description.name: description
     for description in ECOMAX_PARAMETER_TYPES[ProductType.ECOMAX_P]
@@ -1333,7 +1313,6 @@ async def test_config_number(
         number_cls = MixerNumber
 
     assert isinstance(description, NumberDescription)
-    scale, offset = SCALE_OVERRIDES.get(key, (1, 0))
 
     # Check entry.
     entity_registry = er.async_get(hass)
@@ -1348,12 +1327,19 @@ async def test_config_number(
     assert isinstance(state, State)
     assert state.state != STATE_UNAVAILABLE
     assert isclose(
-        state.attributes[ATTR_STEP], description.step * scale, rel_tol=FLOAT_TOLERANCE
+        state.attributes[ATTR_STEP], description.step, rel_tol=FLOAT_TOLERANCE
     )
-    unit_of_measurement = UNIT_OVERRIDES.get(key, description.unit_of_measurement)
-    assert state.attributes.get(ATTR_UNIT_OF_MEASUREMENT) == getattr(
-        unit_of_measurement, "value", unit_of_measurement
-    )
+    unit_of_measurement = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+    if description.unit_of_measurement:
+        # Units follow pyplumio.
+        assert unit_of_measurement == getattr(
+            description.unit_of_measurement, "value", description.unit_of_measurement
+        )
+
+    if device_class := state.attributes.get(ATTR_DEVICE_CLASS):
+        assert (
+            unit_of_measurement in DEVICE_CLASS_UNITS[NumberDeviceClass(device_class)]
+        )
 
     # Dispatch new state.
     new_state = number_cls(
@@ -1364,28 +1350,36 @@ async def test_config_number(
     await dispatch_value(connection.device, key, new_state, source_device=source_device)
     state = hass.states.get(entity_id)
     assert isinstance(state, State)
+    assert isclose(float(state.state), new_state.value, rel_tol=FLOAT_TOLERANCE)
     assert isclose(
-        float(state.state), new_state.value * scale + offset, rel_tol=FLOAT_TOLERANCE
+        state.attributes[ATTR_MIN], new_state.min_value, rel_tol=FLOAT_TOLERANCE
     )
     assert isclose(
-        state.attributes[ATTR_MIN],
-        new_state.min_value * scale + offset,
-        rel_tol=FLOAT_TOLERANCE,
-    )
-    assert isclose(
-        state.attributes[ATTR_MAX],
-        new_state.max_value * scale + offset,
-        rel_tol=FLOAT_TOLERANCE,
+        state.attributes[ATTR_MAX], new_state.max_value, rel_tol=FLOAT_TOLERANCE
     )
 
     # Set new state.
-    native_max_value = new_state.max_value * scale + offset
     with patch("pyplumio.devices.Device.set_nowait") as mock_set_nowait:
-        state = await async_set_value(hass, entity_id, native_max_value)
+        state = await async_set_value(hass, entity_id, new_state.max_value)
 
     mock_set_nowait.assert_called_once_with(key, new_state.max_value)
     assert isinstance(state, State)
-    assert isclose(float(state.state), native_max_value, rel_tol=FLOAT_TOLERANCE)
+    assert isclose(float(state.state), new_state.max_value, rel_tol=FLOAT_TOLERANCE)
+
+
+@pytest.mark.usefixtures("ecomax_p", "mixers")
+async def test_config_number_disabled(hass: HomeAssistant, setup_config_entry) -> None:
+    """Test that configuration numbers not sent by the controller are disabled."""
+    await setup_config_entry()
+    entity_registry = er.async_get(hass)
+    for entity_id in (
+        "number.ecomax_airflow_power_100",
+        "number.ecomax_mixer_1_heating_curve",
+    ):
+        entry = entity_registry.async_get(entity_id)
+        assert entry, entity_id
+        assert entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION
+        assert hass.states.get(entity_id) is None
 
 
 EXTENDED_NUMBER_KEYS: tuple[str, ...] = tuple(

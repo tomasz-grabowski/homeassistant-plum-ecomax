@@ -14,7 +14,6 @@ from homeassistant.components.number import (
 )
 from homeassistant.const import (
     PERCENTAGE,
-    REVOLUTIONS_PER_MINUTE,
     Platform,
     UnitOfMass,
     UnitOfPower,
@@ -50,9 +49,6 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True, kw_only=True)
 class EcomaxNumberEntityDescription(EcomaxEntityDescription, NumberEntityDescription):
     """Describes an ecoMAX number."""
-
-    native_scale: float = 1
-    native_offset: float = 0
 
 
 NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
@@ -111,66 +107,71 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     ),
     EcomaxNumberEntityDescription(
         key="heating_hysteresis",
-        translation_key="heating_hysteresis",
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
         native_step=1,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         product_types={ProductType.ECOMAX_P},
+        translation_key="heating_hysteresis",
     ),
     EcomaxNumberEntityDescription(
         key="h1_hysteresis",
-        translation_key="h1_hysteresis",
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
         native_step=1,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         product_types={ProductType.ECOMAX_P},
+        translation_key="h1_hysteresis",
     ),
     EcomaxNumberEntityDescription(
         key="h2_hysteresis",
-        translation_key="h2_hysteresis",
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
         native_step=1,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         product_types={ProductType.ECOMAX_P},
+        translation_key="h2_hysteresis",
     ),
     EcomaxNumberEntityDescription(
         key="heating_pump_enable_temp",
-        translation_key="heating_pump_enable_temp",
+        device_class=NumberDeviceClass.TEMPERATURE,
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
         native_step=1,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         product_types={ProductType.ECOMAX_P},
+        translation_key="heating_pump_enable_temp",
     ),
     EcomaxNumberEntityDescription(
         key="water_heater_hysteresis",
-        translation_key="water_heater_hysteresis",
+        entity_category=EntityCategory.CONFIG,
+        mode=NumberMode.BOX,
         native_step=1,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         product_types={ProductType.ECOMAX_P},
+        translation_key="water_heater_hysteresis",
     ),
     EcomaxNumberEntityDescription(
         key="airflow_power_100",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="airflow_power_100",
     ),
     EcomaxNumberEntityDescription(
         key="airflow_power_50",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="airflow_power_50",
     ),
     EcomaxNumberEntityDescription(
         key="airflow_power_30",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="airflow_power_30",
     ),
@@ -458,10 +459,8 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     EcomaxNumberEntityDescription(
         key="kindling_airflow_power",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="kindling_airflow_power",
     ),
@@ -526,9 +525,8 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
         device_class=NumberDeviceClass.DURATION,
         entity_category=EntityCategory.CONFIG,
         mode=NumberMode.BOX,
-        native_scale=2,
-        native_step=2,
-        native_unit_of_measurement=UnitOfTime.SECONDS,
+        native_step=1,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
         product_types={ProductType.ECOMAX_P},
         translation_key="warming_up_time",
     ),
@@ -593,10 +591,8 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     EcomaxNumberEntityDescription(
         key="stabilization_airflow_power",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="stabilization_airflow_power",
     ),
@@ -653,10 +649,8 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     EcomaxNumberEntityDescription(
         key="supervision_airflow_power",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="supervision_airflow_power",
     ),
@@ -719,10 +713,8 @@ NUMBER_TYPES: tuple[EcomaxNumberEntityDescription, ...] = (
     EcomaxNumberEntityDescription(
         key="burning_off_airflow_power",
         entity_category=EntityCategory.CONFIG,
-        native_offset=300,
-        native_scale=10,
-        native_step=10,
-        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        native_step=1,
+        native_unit_of_measurement=PERCENTAGE,
         product_types={ProductType.ECOMAX_P},
         translation_key="burning_off_airflow_power",
     ),
@@ -1214,32 +1206,16 @@ class EcomaxNumber(EcomaxEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update current value."""
-        self.device.set_nowait(self.entity_description.key, self._to_device(value))
+        self.device.set_nowait(self.entity_description.key, value)
         self._attr_native_value = value
         self.async_write_ha_state()
 
     async def async_update(self, value: Parameter) -> None:
         """Update entity state."""
-        self._attr_native_value = self._from_device(cast(float, value.value))
-        self._attr_native_min_value = self._from_device(cast(float, value.min_value))
-        self._attr_native_max_value = self._from_device(cast(float, value.max_value))
+        self._attr_native_value = cast(float, value.value)
+        self._attr_native_min_value = cast(float, value.min_value)
+        self._attr_native_max_value = cast(float, value.max_value)
         self.async_write_ha_state()
-
-    def _from_device(self, value: float) -> float:
-        """Convert a device value to the native value."""
-        description = self.entity_description
-        if description.native_scale == 1 and description.native_offset == 0:
-            return value
-
-        return value * description.native_scale + description.native_offset
-
-    def _to_device(self, value: float) -> float:
-        """Convert a native value to the device value."""
-        description = self.entity_description
-        if description.native_scale == 1 and description.native_offset == 0:
-            return value
-
-        return round((value - description.native_offset) / description.native_scale)
 
 
 @callback
