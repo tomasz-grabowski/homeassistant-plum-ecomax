@@ -1519,6 +1519,14 @@ async def test_extended_numbers(hass: HomeAssistant, setup_config_entry) -> None
             1100,
         ),
         (
+            "stabilization_fan_speed",
+            "number.ecomax_stabilization_fan_speed",
+            (1000, 700, 2850, 10),
+            REVOLUTIONS_PER_MINUTE,
+            None,
+            1200,
+        ),
+        (
             "thermostat_decrease_boiler_temp",
             "number.ecomax_thermostat_boiler_temperature_decrease",
             (0, 0, 30, 1),
@@ -1583,6 +1591,19 @@ def assert_legacy_numbers(hass: HomeAssistant, extended: bool) -> None:
 
     # Legacy numbers without the extended replacement are kept.
     assert get_number_entity_id(hass, "fuel_calorific_value")
+
+
+@pytest.mark.usefixtures("ecomax_p", "extended_parameters", "mixers")
+async def test_extended_numbers_keep_mixer_numbers(
+    hass: HomeAssistant, setup_config_entry
+) -> None:
+    """Test that extended numbers replace only the boiler legacy numbers."""
+    await setup_config_entry()
+    assert not get_number_entity_id(hass, "thermostat_decrease_target_temp")
+    assert (
+        get_number_entity_id(hass, "mixer-0-thermostat_decrease_target_temp")
+        == "number.ecomax_mixer_1_thermostat_target_temperature_decrease"
+    )
 
 
 @pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")

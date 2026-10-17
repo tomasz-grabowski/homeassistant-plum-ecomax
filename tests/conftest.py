@@ -483,6 +483,7 @@ ECOMAX_860P4_EXTENDED_PARAMETERS: Final[dict[int, ParameterValues]] = {
     23: ParameterValues(value=1, min_value=0, max_value=2),
     29: ParameterValues(value=14, min_value=1, max_value=255),
     53: ParameterValues(value=18, min_value=1, max_value=255),
+    59: ParameterValues(value=70, min_value=40, max_value=255),
     63: ParameterValues(value=70, min_value=40, max_value=255),
     72: ParameterValues(value=50, min_value=1, max_value=60),
     117: ParameterValues(value=0, min_value=0, max_value=30),
