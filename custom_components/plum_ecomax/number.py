@@ -1203,6 +1203,7 @@ EXTENDED_NUMBER_DEVICE_CLASSES: dict[
 EXTENDED_TEMPERATURE_DELTAS: set[str] = {
     "burning_off_detection_delta_temp",
     "kindling_temp_delta",
+    "thermostat_decrease_boiler_temp",
 }
 
 

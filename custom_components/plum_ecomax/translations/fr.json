@@ -431,6 +431,9 @@
       "kindling_duration": {
         "name": "Durée d'allumage"
       },
+      "kindling_fan_speed": {
+        "name": "Vitesse du ventilateur à l'allumage"
+      },
       "kindling_feeder_dose": {
         "name": "Kindling fuel dose"
       },
@@ -554,6 +557,9 @@
       "mixer_input_dead_zone": {
         "name": "Mixer dead zone"
       },
+      "moving_grate_work_time": {
+        "name": "Durée de fonctionnement de la grille mobile"
+      },
       "night_target_circuit_temp": {
         "name": "Température de nuit cible"
       },
@@ -589,6 +595,9 @@
       },
       "stabilization_draft": {
         "name": "Dépression de stabilisation"
+      },
+      "stabilization_fan_speed": {
+        "name": "Vitesse du ventilateur en stabilisation"
       },
       "stabilization_time": {
         "name": "Stabilization time"
@@ -649,6 +658,9 @@
       },
       "target_mixer_temp": {
         "name": "Température de mélangeur cible"
+      },
+      "thermostat_decrease_boiler_temp": {
+        "name": "Abaissement de la température de la chaudière par thermostat"
       },
       "thermostat_decrease_target_temp": {
         "name": "Thermostat target temperature decrease"

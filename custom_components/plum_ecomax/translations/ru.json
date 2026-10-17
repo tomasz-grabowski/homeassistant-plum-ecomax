@@ -431,6 +431,9 @@
       "kindling_duration": {
         "name": "Время розжига"
       },
+      "kindling_fan_speed": {
+        "name": "Обороты вентилятора при розжиге"
+      },
       "kindling_feeder_dose": {
         "name": "Kindling fuel dose"
       },
@@ -554,6 +557,9 @@
       "mixer_input_dead_zone": {
         "name": "Mixer dead zone"
       },
+      "moving_grate_work_time": {
+        "name": "Время работы подвижного колосника"
+      },
       "night_target_circuit_temp": {
         "name": "Ночная температура контура"
       },
@@ -589,6 +595,9 @@
       },
       "stabilization_draft": {
         "name": "Разрежение при стабилизации"
+      },
+      "stabilization_fan_speed": {
+        "name": "Обороты вентилятора при стабилизации"
       },
       "stabilization_time": {
         "name": "Stabilization time"
@@ -649,6 +658,9 @@
       },
       "target_mixer_temp": {
         "name": "Заданная температура миксера"
+      },
+      "thermostat_decrease_boiler_temp": {
+        "name": "Снижение температуры котла от термостата"
       },
       "thermostat_decrease_target_temp": {
         "name": "Thermostat target temperature decrease"

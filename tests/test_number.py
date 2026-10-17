@@ -1436,7 +1436,7 @@ async def test_extended_numbers(hass: HomeAssistant, setup_config_entry) -> None
     await setup_config_entry()
     assert_legacy_numbers(hass, extended=True)
     entity_registry = er.async_get(hass)
-    assert len(EXTENDED_NUMBER_KEYS) == 56
+    assert len(EXTENDED_NUMBER_KEYS) == 60
     for key in EXTENDED_NUMBER_KEYS:
         entity_id = get_number_entity_id(hass, key)
         assert entity_id, key
@@ -1510,6 +1510,30 @@ async def test_extended_numbers(hass: HomeAssistant, setup_config_entry) -> None
             NumberDeviceClass.TEMPERATURE_DELTA,
             4.5,
         ),
+        (
+            "kindling_fan_speed",
+            "number.ecomax_kindling_fan_speed",
+            (1000, 700, 2850, 10),
+            REVOLUTIONS_PER_MINUTE,
+            None,
+            1100,
+        ),
+        (
+            "thermostat_decrease_boiler_temp",
+            "number.ecomax_thermostat_boiler_temperature_decrease",
+            (0, 0, 30, 1),
+            UnitOfTemperature.CELSIUS,
+            NumberDeviceClass.TEMPERATURE_DELTA,
+            5,
+        ),
+        (
+            "moving_grate_work_time",
+            "number.ecomax_moving_grate_work_time",
+            (27, 10, 250, 1),
+            UnitOfTime.SECONDS,
+            NumberDeviceClass.DURATION,
+            30,
+        ),
     ),
 )
 @pytest.mark.usefixtures("ecomax_p", "extended_parameters")
@@ -1550,7 +1574,7 @@ async def test_extended_number(
 
 def assert_legacy_numbers(hass: HomeAssistant, extended: bool) -> None:
     """Assert that legacy numbers are replaced only by extended numbers."""
-    assert len(REPLACED_NUMBER_KEYS) == 19
+    assert len(REPLACED_NUMBER_KEYS) == 22
     for key in REPLACED_NUMBER_KEYS:
         assert bool(get_number_entity_id(hass, key)) is not extended, key
 
@@ -1558,8 +1582,7 @@ def assert_legacy_numbers(hass: HomeAssistant, extended: bool) -> None:
         assert bool(get_number_entity_id(hass, key)) is extended, key
 
     # Legacy numbers without the extended replacement are kept.
-    assert get_number_entity_id(hass, "kindling_airflow_power")
-    assert get_number_entity_id(hass, "stabilization_airflow_power")
+    assert get_number_entity_id(hass, "fuel_calorific_value")
 
 
 @pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")

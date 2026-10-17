@@ -431,6 +431,9 @@
       "kindling_duration": {
         "name": "Czas rozpalania"
       },
+      "kindling_fan_speed": {
+        "name": "Nadmuch rozpalania"
+      },
       "kindling_feeder_dose": {
         "name": "Dawka paliwa"
       },
@@ -554,6 +557,9 @@
       "mixer_input_dead_zone": {
         "name": "Nieczułość mieszacza"
       },
+      "moving_grate_work_time": {
+        "name": "Praca ruchomego rusztu"
+      },
       "night_target_circuit_temp": {
         "name": "Temperatura zadana noc"
       },
@@ -589,6 +595,9 @@
       },
       "stabilization_draft": {
         "name": "Podciśnienie po rozpaleniu"
+      },
+      "stabilization_fan_speed": {
+        "name": "Nadmuch po rozpaleniu"
       },
       "stabilization_time": {
         "name": "Czas stabilizacji"
@@ -649,6 +658,9 @@
       },
       "target_mixer_temp": {
         "name": "Temperatura zadana mieszacza"
+      },
+      "thermostat_decrease_boiler_temp": {
+        "name": "Obniżenie temperatury kotła od termostatu"
       },
       "thermostat_decrease_target_temp": {
         "name": "Obniżenie temperatury od termostatu"

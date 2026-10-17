@@ -431,6 +431,9 @@
       "kindling_duration": {
         "name": "Anheizdauer"
       },
+      "kindling_fan_speed": {
+        "name": "Gebläsedrehzahl Anheizen"
+      },
       "kindling_feeder_dose": {
         "name": "Kindling fuel dose"
       },
@@ -554,6 +557,9 @@
       "mixer_input_dead_zone": {
         "name": "Mixer dead zone"
       },
+      "moving_grate_work_time": {
+        "name": "Arbeitszeit beweglicher Rost"
+      },
       "night_target_circuit_temp": {
         "name": "Soll-Temperatur Heizkreis (Nacht)"
       },
@@ -589,6 +595,9 @@
       },
       "stabilization_draft": {
         "name": "Unterdruck Stabilisierung"
+      },
+      "stabilization_fan_speed": {
+        "name": "Gebläsedrehzahl Stabilisierung"
       },
       "stabilization_time": {
         "name": "Stabilization time"
@@ -649,6 +658,9 @@
       },
       "target_mixer_temp": {
         "name": "Soll-Mischertemperatur"
+      },
+      "thermostat_decrease_boiler_temp": {
+        "name": "Absenkung Kesseltemperatur durch Thermostat"
       },
       "thermostat_decrease_target_temp": {
         "name": "Thermostat target temperature decrease"

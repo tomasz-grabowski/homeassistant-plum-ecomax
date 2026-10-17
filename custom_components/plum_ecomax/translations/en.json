@@ -431,6 +431,9 @@
       "kindling_duration": {
         "name": "Kindling duration"
       },
+      "kindling_fan_speed": {
+        "name": "Kindling fan speed"
+      },
       "kindling_feeder_dose": {
         "name": "Kindling fuel dose"
       },
@@ -554,6 +557,9 @@
       "mixer_input_dead_zone": {
         "name": "Mixer dead zone"
       },
+      "moving_grate_work_time": {
+        "name": "Moving grate work time"
+      },
       "night_target_circuit_temp": {
         "name": "Night target circuit temperature"
       },
@@ -589,6 +595,9 @@
       },
       "stabilization_draft": {
         "name": "Stabilization draft"
+      },
+      "stabilization_fan_speed": {
+        "name": "Stabilization fan speed"
       },
       "stabilization_time": {
         "name": "Stabilization time"
@@ -649,6 +658,9 @@
       },
       "target_mixer_temp": {
         "name": "Target mixer temperature"
+      },
+      "thermostat_decrease_boiler_temp": {
+        "name": "Thermostat boiler temperature decrease"
       },
       "thermostat_decrease_target_temp": {
         "name": "Thermostat target temperature decrease"
