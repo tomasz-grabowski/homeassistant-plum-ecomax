@@ -18,7 +18,7 @@ import pyplumio
 from pyplumio.connection import Connection
 from pyplumio.const import FrameType, ProductType
 from pyplumio.devices import PhysicalDevice
-from pyplumio.parameters.ecomax import get_ecomax_extended_parameter_types
+from pyplumio.parameters.ecomax import EXTENDED_PARAMETER_TYPES
 from pyplumio.structures.ecomax_extended_parameters import (
     ATTR_ECOMAX_EXTENDED_PARAMETERS,
 )
@@ -225,7 +225,7 @@ class EcomaxConnection:
         """Wait for extended parameters, if the product has them."""
         try:
             product = await self.device.get(ATTR_PRODUCT, timeout=DEFAULT_TIMEOUT)
-            if not get_ecomax_extended_parameter_types(product):
+            if (product.id, product.model) not in EXTENDED_PARAMETER_TYPES:
                 return False
 
             # Table is requested after the frame version announcement.

@@ -25,7 +25,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pyplumio.const import ProductType, UnitOfMeasurement
 from pyplumio.parameters import NumberDescription, Parameter
-from pyplumio.parameters.ecomax import get_ecomax_extended_parameter_types
+from pyplumio.parameters.ecomax import EXTENDED_PARAMETER_TYPES
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
@@ -1260,7 +1260,8 @@ def async_make_extended_number_description(
 def async_setup_extended_numbers(connection: EcomaxConnection) -> list[EcomaxNumber]:
     """Set up the ecoMAX extended numbers."""
     device = connection.device
-    parameter_types = get_ecomax_extended_parameter_types(device.data[ATTR_PRODUCT])
+    product = device.data[ATTR_PRODUCT]
+    parameter_types = EXTENDED_PARAMETER_TYPES[(product.id, product.model)]
     return [
         EcomaxNumber(connection, async_make_extended_number_description(description))
         for description in parameter_types.values()

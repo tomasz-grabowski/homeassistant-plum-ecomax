@@ -44,16 +44,21 @@ from pyplumio.parameters.ecomax import (
     PARAMETER_TYPES as ECOMAX_PARAMETER_TYPES,
     EcomaxNumber,
     EcomaxNumberDescription,
-    get_ecomax_extended_parameter_types,
 )
 from pyplumio.parameters.mixer import (
     PARAMETER_TYPES as MIXER_PARAMETER_TYPES,
     MixerNumber,
     MixerNumberDescription,
 )
+from pyplumio.structures.ecomax_extended_parameters import (
+    ATTR_ECOMAX_EXTENDED_PARAMETERS,
+)
 import pytest
 
-from custom_components.plum_ecomax.connection import EcomaxConnection
+from custom_components.plum_ecomax.connection import (
+    WAIT_FOR_EXTENDED_PARAMETERS_SECONDS,
+    EcomaxConnection,
+)
 from custom_components.plum_ecomax.const import (
     ATTR_CONTROL_MODE,
     ATTR_ENTITIES,
@@ -1602,16 +1607,27 @@ async def test_extended_numbers_keep_mixer_numbers(
 
 @pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")
 async def test_legacy_numbers_without_extended_parameters(
-    hass: HomeAssistant, setup_config_entry
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
 ) -> None:
     """Test that legacy numbers are kept when extended table never arrives."""
-    with patch(
-        "custom_components.plum_ecomax.connection.get_ecomax_extended_parameter_types",
-        wraps=get_ecomax_extended_parameter_types,
-    ) as mock_get_types:
+    wait_for = connection.device.wait_for
+
+    async def _wait_for(name: str, timeout: float | None = None) -> None:
+        """Never receive the extended parameters."""
+        if name == ATTR_ECOMAX_EXTENDED_PARAMETERS:
+            raise TimeoutError
+
+        await wait_for(name, timeout=timeout)
+
+    with patch.object(
+        connection.device, "wait_for", side_effect=_wait_for
+    ) as mock_wait_for:
         await setup_config_entry()
 
-    mock_get_types.assert_called_once()
+    mock_wait_for.assert_any_await(
+        ATTR_ECOMAX_EXTENDED_PARAMETERS,
+        timeout=WAIT_FOR_EXTENDED_PARAMETERS_SECONDS,
+    )
     assert_legacy_numbers(hass, extended=False)
 
 
