@@ -15,22 +15,27 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from pyplumio.const import ATTR_CONNECTED
 from pyplumio.structures.sensor_data import (
+    ATTR_ALARM,
     ATTR_CIRCULATION_PUMP,
+    ATTR_CIRCULATION_PUMP_FLAG,
     ATTR_FAN,
     ATTR_FAN2_EXHAUST,
     ATTR_FEEDER,
     ATTR_FIREPLACE_PUMP,
     ATTR_HEATING_PUMP,
+    ATTR_HEATING_PUMP_FLAG,
     ATTR_LIGHTER,
+    ATTR_OUTER_BOILER,
     ATTR_PENDING_ALERTS,
     ATTR_PUMP,
     ATTR_SOLAR_PUMP,
     ATTR_WATER_HEATER_PUMP,
+    ATTR_WATER_HEATER_PUMP_FLAG,
 )
 import pytest
 
 from custom_components.plum_ecomax.connection import EcomaxConnection
-from custom_components.plum_ecomax.const import ATTR_ENTITIES, ATTR_REGDATA
+from custom_components.plum_ecomax.const import ATTR_ENTITIES, ATTR_REGDATA, DOMAIN
 from tests.conftest import dispatch_value
 
 
@@ -244,6 +249,28 @@ async def test_exhaust_fan_binary_sensor(
     state = hass.states.get(exhaust_fan_entity_id)
     assert isinstance(state, State)
     assert state.state == STATE_ON
+
+
+@pytest.mark.usefixtures("ecomax_p", "extended_parameters")
+async def test_exhaust_fan_binary_sensor_not_created_with_extended_parameters(
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
+) -> None:
+    """Test exhaust fan binary sensor is not created on the ecoMAX 860P4."""
+    await setup_config_entry()
+    entity_registry = er.async_get(hass)
+    assert not entity_registry.async_get_entity_id(
+        Platform.BINARY_SENSOR, DOMAIN, f"{connection.uid}-fan2_exhaust"
+    )
+
+
+@pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")
+async def test_exhaust_fan_binary_sensor_without_extended_parameters(
+    hass: HomeAssistant, setup_config_entry
+) -> None:
+    """Test exhaust fan binary sensor is kept when the extended table never arrives."""
+    await setup_config_entry()
+    entity_registry = er.async_get(hass)
+    assert entity_registry.async_get("binary_sensor.ecomax_exhaust_fan")
 
 
 @pytest.mark.usefixtures("ecomax_p")
@@ -520,6 +547,152 @@ async def test_custom_regdata_binary_sensors(
 
     # Dispatch new value.
     await dispatch_value(connection.device, ATTR_REGDATA, {9000: True})
+    state = hass.states.get(entity_id)
+    assert isinstance(state, State)
+    assert state.state == STATE_ON
+
+
+@pytest.mark.usefixtures("ecomax_p", "extended_parameters")
+async def test_regdata_exhaust_fan_binary_sensor(
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
+) -> None:
+    """Test regdata exhaust fan binary sensor on the ecoMAX 860P4."""
+    await dispatch_value(connection.device, ATTR_REGDATA, {1537: False})
+    await setup_config_entry()
+    entity_id = "binary_sensor.ecomax_exhaust_fan"
+
+    # Test entry.
+    entity_registry = er.async_get(hass)
+    entry = entity_registry.async_get(entity_id)
+    assert entry
+    assert entry.translation_key == "exhaust_fan"
+    assert entry.unique_id == f"{connection.uid}-1537"
+
+    # Get initial value.
+    state = hass.states.get(entity_id)
+    assert isinstance(state, State)
+    assert state.state == STATE_OFF
+    assert state.attributes[ATTR_FRIENDLY_NAME] == "ecoMAX Exhaust fan"
+    assert state.attributes[ATTR_DEVICE_CLASS] == BinarySensorDeviceClass.RUNNING
+
+    # Dispatch new value.
+    await dispatch_value(connection.device, ATTR_REGDATA, {1537: True})
+    state = hass.states.get(entity_id)
+    assert isinstance(state, State)
+    assert state.state == STATE_ON
+
+
+@pytest.mark.parametrize("product", ("ecomax_p", "ecomax_860p3_o"), indirect=True)
+@pytest.mark.usefixtures("product")
+async def test_regdata_binary_sensors_not_created_for_other_products(
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
+) -> None:
+    """Test that regdata binary sensors are created only for ecoMAX 860P4."""
+    await dispatch_value(connection.device, ATTR_REGDATA, {1537: True})
+    await setup_config_entry()
+    entity_registry = er.async_get(hass)
+    assert not entity_registry.async_get_entity_id(
+        Platform.BINARY_SENSOR, DOMAIN, f"{connection.uid}-1537"
+    )
+
+
+@pytest.mark.usefixtures("ecomax_p", "ecomax_860p4")
+async def test_binary_sensors_wait_for_extended_parameters(
+    hass: HomeAssistant, connection: EcomaxConnection, setup_config_entry
+) -> None:
+    """Test binary sensor setup waits for the extended parameters."""
+
+    async def _async_setup_extended_parameters() -> bool:
+        """Receive the extended parameters only when waited for."""
+        await dispatch_value(connection.device, "exhaust_fan_pi_gain", 1)
+        return True
+
+    with (
+        patch("custom_components.plum_ecomax.PLATFORMS", [Platform.BINARY_SENSOR]),
+        patch(
+            "custom_components.plum_ecomax.connection.EcomaxConnection.async_setup_extended_parameters",
+            side_effect=_async_setup_extended_parameters,
+        ),
+    ):
+        await setup_config_entry()
+
+    entity_registry = er.async_get(hass)
+    assert not entity_registry.async_get_entity_id(
+        Platform.BINARY_SENSOR, DOMAIN, f"{connection.uid}-fan2_exhaust"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "entity_id", "translation_key", "friendly_name", "device_class"),
+    (
+        (
+            ATTR_ALARM,
+            "binary_sensor.ecomax_alarm_output",
+            "alarm_output",
+            "ecoMAX Alarm output",
+            BinarySensorDeviceClass.PROBLEM,
+        ),
+        (
+            ATTR_HEATING_PUMP_FLAG,
+            "binary_sensor.ecomax_ch_pump_enabled",
+            "heating_pump_flag",
+            "ecoMAX CH pump enabled",
+            None,
+        ),
+        (
+            ATTR_WATER_HEATER_PUMP_FLAG,
+            "binary_sensor.ecomax_dhw_pump_enabled",
+            "water_heater_pump_flag",
+            "ecoMAX DHW pump enabled",
+            None,
+        ),
+        (
+            ATTR_CIRCULATION_PUMP_FLAG,
+            "binary_sensor.ecomax_circulation_pump_enabled",
+            "circulation_pump_flag",
+            "ecoMAX Circulation pump enabled",
+            None,
+        ),
+        (
+            ATTR_OUTER_BOILER,
+            "binary_sensor.ecomax_reserve_boiler_output",
+            "outer_boiler",
+            "ecoMAX Reserve boiler output",
+            BinarySensorDeviceClass.RUNNING,
+        ),
+    ),
+)
+@pytest.mark.usefixtures("ecomax_p")
+async def test_output_binary_sensors(
+    key: str,
+    entity_id: str,
+    translation_key: str,
+    friendly_name: str,
+    device_class: BinarySensorDeviceClass | None,
+    hass: HomeAssistant,
+    connection: EcomaxConnection,
+    setup_config_entry,
+) -> None:
+    """Test ecoMAX output and output flag binary sensors."""
+    await dispatch_value(connection.device, key, False)
+    await setup_config_entry()
+
+    # Test entry.
+    entity_registry = er.async_get(hass)
+    entry = entity_registry.async_get(entity_id)
+    assert entry
+    assert entry.translation_key == translation_key
+    assert entry.unique_id == f"{connection.uid}-{key}"
+
+    # Get initial value.
+    state = hass.states.get(entity_id)
+    assert isinstance(state, State)
+    assert state.state == STATE_OFF
+    assert state.attributes[ATTR_FRIENDLY_NAME] == friendly_name
+    assert state.attributes.get(ATTR_DEVICE_CLASS) == device_class
+
+    # Dispatch new value.
+    await dispatch_value(connection.device, key, True)
     state = hass.states.get(entity_id)
     assert isinstance(state, State)
     assert state.state == STATE_ON

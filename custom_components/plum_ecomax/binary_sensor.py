@@ -21,13 +21,15 @@ from pyplumio.const import ProductType
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
-from .const import DeviceType
+from .const import REGDATA_PRODUCTS, DeviceType
 from .entity import (
     EcomaxEntity,
     EcomaxEntityDescription,
     MixerEntity,
     RegdataEntity,
+    RegdataEntityDescription,
     ThermostatEntity,
+    async_get_by_extended_parameters,
     async_get_by_modules,
     async_get_by_product_type,
     async_get_custom_entities,
@@ -77,6 +79,38 @@ BINARY_SENSOR_TYPES: tuple[EcomaxBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
         translation_key="connection_status",
+        value_fn=lambda x: x,
+    ),
+    EcomaxBinarySensorEntityDescription(
+        key="alarm",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="alarm_output",
+        value_fn=lambda x: x,
+    ),
+    EcomaxBinarySensorEntityDescription(
+        key="heating_pump_flag",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="heating_pump_flag",
+        value_fn=lambda x: x,
+    ),
+    EcomaxBinarySensorEntityDescription(
+        key="water_heater_pump_flag",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="water_heater_pump_flag",
+        value_fn=lambda x: x,
+    ),
+    EcomaxBinarySensorEntityDescription(
+        key="circulation_pump_flag",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="circulation_pump_flag",
+        value_fn=lambda x: x,
+    ),
+    EcomaxBinarySensorEntityDescription(
+        key="outer_boiler",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="outer_boiler",
         value_fn=lambda x: x,
     ),
     EcomaxBinarySensorEntityDescription(
@@ -142,9 +176,12 @@ def async_setup_ecomax_binary_sensors(
     """Set up the ecoMAX binary sensors."""
     return [
         EcomaxBinarySensor(connection, description)
-        for description in async_get_by_modules(
-            connection.device.modules,
-            async_get_by_product_type(connection.product_type, BINARY_SENSOR_TYPES),
+        for description in async_get_by_extended_parameters(
+            connection.device.data,
+            async_get_by_modules(
+                connection.device.modules,
+                async_get_by_product_type(connection.product_type, BINARY_SENSOR_TYPES),
+            ),
         )
     ]
 
@@ -244,8 +281,22 @@ def async_setup_custom_mixer_binary_sensors(
 
 
 @dataclass(frozen=True, kw_only=True)
-class RegdataBinarySensorEntityDescription(EcomaxBinarySensorEntityDescription):
+class RegdataBinarySensorEntityDescription(
+    EcomaxBinarySensorEntityDescription, RegdataEntityDescription
+):
     """Describes a regulator data binary sensor."""
+
+
+# The key is the numeric regdata key, so the unique ids of the custom
+# regdata binary sensors this replaces carry over.
+REGDATA_BINARY_SENSOR_TYPES: tuple[RegdataBinarySensorEntityDescription, ...] = (
+    RegdataBinarySensorEntityDescription(
+        key="1537",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        translation_key="exhaust_fan",
+        value_fn=lambda x: x,
+    ),
+)
 
 
 class RegdataBinarySensor(RegdataEntity, EcomaxBinarySensor):
@@ -257,6 +308,22 @@ class RegdataBinarySensor(RegdataEntity, EcomaxBinarySensor):
             regdata.get(self._regdata_key, None)
         )
         self.async_write_ha_state()
+
+
+@callback
+def async_setup_regdata_binary_sensors(
+    connection: EcomaxConnection,
+) -> list[RegdataBinarySensor]:
+    """Set up the regulator data binary sensors."""
+    if (connection.product_id, connection.model) not in REGDATA_PRODUCTS:
+        return []
+
+    return [
+        RegdataBinarySensor(connection, description)
+        for description in async_get_by_modules(
+            connection.device.modules, REGDATA_BINARY_SENSOR_TYPES
+        )
+    ]
 
 
 @callback
@@ -327,15 +394,18 @@ async def async_setup_entry(
     _LOGGER.debug("Starting setup of binary sensor platform...")
 
     connection = entry.runtime_data.connection
+    # Platforms set up concurrently, so wait for the extended parameters
+    # before checking them (fan2_exhaust is hidden on the ecoMAX 860P4).
+    await connection.async_setup_extended_parameters()
     entities = async_setup_ecomax_binary_sensors(connection)
 
     # Add custom ecoMAX binary sensors.
     entities += async_setup_custom_ecomax_binary_sensors(connection, entry)
 
-    # Add custom regulator data binary sensors.
-    if (
-        regdata_entities := async_setup_custom_regdata_binary_sensors(connection, entry)
-    ) and await connection.async_setup_regdata():
+    # Add regulator data (device-specific) binary sensors.
+    regdata_entities = async_setup_regdata_binary_sensors(connection)
+    regdata_entities += async_setup_custom_regdata_binary_sensors(connection, entry)
+    if regdata_entities and await connection.async_setup_regdata():
         entities += regdata_entities
 
     # Add mixer/circuit binary sensors.

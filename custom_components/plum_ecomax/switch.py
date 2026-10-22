@@ -9,6 +9,7 @@ from typing import Any, cast
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.const import STATE_OFF, STATE_ON, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pyplumio.const import ProductType, State
 from pyplumio.parameters import Numeric, Parameter
@@ -22,6 +23,7 @@ from .entity import (
     MixerEntity,
     SubdeviceEntityDescription,
     ThermostatEntity,
+    async_get_by_extended_parameters,
     async_get_by_index,
     async_get_by_modules,
     async_get_by_product_type,
@@ -76,6 +78,62 @@ SWITCH_TYPES: tuple[EcomaxSwitchEntityDescription, ...] = (
         product_types={ProductType.ECOMAX_P},
         translation_key="water_heater_schedule_switch",
     ),
+    EcomaxSwitchEntityDescription(
+        key="lambda_control",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="lambda_control",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="schedule_feeder_2",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="schedule_feeder_2",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="thermostat_mode",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="thermostat_mode",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="disable_pump_on_thermostat",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="disable_pump_on_thermostat",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="circulation_control",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="circulation_control",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="buffer_control",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="buffer_control",
+    ),
+)
+
+
+EXTENDED_SWITCH_TYPES: tuple[EcomaxSwitchEntityDescription, ...] = (
+    EcomaxSwitchEntityDescription(
+        key="heat_exchanger",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        state_off=0,
+        state_on=1,
+        translation_key="heat_exchanger",
+    ),
+    EcomaxSwitchEntityDescription(
+        key="draft_sensor",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        state_off=0,
+        state_on=1,
+        translation_key="draft_sensor",
+    ),
 )
 
 
@@ -117,10 +175,25 @@ def async_setup_ecomax_switches(connection: EcomaxConnection) -> list[EcomaxSwit
     """Set up the ecoMAX switches."""
     return [
         EcomaxSwitch(connection, description)
-        for description in async_get_by_modules(
-            connection.device.modules,
-            async_get_by_product_type(connection.product_type, SWITCH_TYPES),
+        for description in async_get_by_extended_parameters(
+            connection.device.data,
+            async_get_by_modules(
+                connection.device.modules,
+                async_get_by_product_type(connection.product_type, SWITCH_TYPES),
+            ),
         )
+    ]
+
+
+@callback
+def async_setup_extended_switches(connection: EcomaxConnection) -> list[EcomaxSwitch]:
+    """Set up the ecoMAX extended switches."""
+    return [
+        EcomaxSwitch(connection, description)
+        for description in async_get_by_product_type(
+            connection.product_type, EXTENDED_SWITCH_TYPES
+        )
+        if description.key in connection.device.data
     ]
 
 
@@ -170,6 +243,12 @@ MIXER_SWITCH_TYPES: tuple[MixerSwitchEntityDescription, ...] = (
         state_off=0,
         state_on=1,
         translation_key="enable_circuit",
+    ),
+    MixerSwitchEntityDescription(
+        key="thermostat_operation",
+        entity_category=EntityCategory.CONFIG,
+        product_types={ProductType.ECOMAX_P},
+        translation_key="thermostat_operation",
     ),
 )
 
@@ -270,7 +349,11 @@ async def async_setup_entry(
     _LOGGER.debug("Starting setup of switch platform...")
 
     connection = entry.runtime_data.connection
+    await connection.async_setup_extended_parameters()
     entities = async_setup_ecomax_switches(connection)
+
+    # Add ecoMAX extended switches.
+    entities += async_setup_extended_switches(connection)
 
     # Add custom ecoMAX switches.
     entities += async_setup_custom_ecomax_switches(connection, entry)

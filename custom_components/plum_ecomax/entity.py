@@ -1,6 +1,6 @@
 """Contains base entity classes."""
 
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Final, Literal, cast, final, overload, override
@@ -31,6 +31,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     CONNECTION_TYPE_TCP,
     DOMAIN,
+    EXTENDED_PARAMETER_REPLACEMENTS,
     LOGICAL_DEVICES,
     MANUFACTURER,
     DeviceType,
@@ -69,6 +70,17 @@ def async_get_by_modules[DescriptorT: EcomaxEntityDescription](
     """Filter descriptions by connected modules."""
     for description in descriptions:
         if getattr(connected_modules, description.module, None) is not None:
+            yield description
+
+
+@callback
+def async_get_by_extended_parameters[DescriptorT: EcomaxEntityDescription](
+    device_data: Mapping[str, Any], descriptions: Iterable[DescriptorT]
+) -> Generator[DescriptorT]:
+    """Filter out descriptions replaced by extended parameters."""
+    for description in descriptions:
+        replaced_by = EXTENDED_PARAMETER_REPLACEMENTS.get(description.key)
+        if replaced_by is None or replaced_by not in device_data:
             yield description
 
 
@@ -358,16 +370,28 @@ class MixerEntity(EcomaxEntity):
         return cast(Mixer, device.data[ATTR_MIXERS][self.index])
 
 
+@dataclass(frozen=True, kw_only=True)
+class RegdataEntityDescription(EcomaxEntityDescription):
+    """Describes a regulator data entity.
+
+    Custom entities use the numeric regdata key as the entity key,
+    built-in entities use a named key with an explicit regdata key.
+    """
+
+    regdata_key: int | None = None
+
+
 class RegdataEntity(EcomaxEntity):
     """Represents a regulator data entity."""
 
     _regdata_key: int
 
     def __init__(
-        self, connection: EcomaxConnection, description: EcomaxEntityDescription
+        self, connection: EcomaxConnection, description: RegdataEntityDescription
     ) -> None:
         """Initialize a new regdata entity."""
-        self._regdata_key = int(description.key)
+        regdata_key = description.regdata_key
+        self._regdata_key = int(description.key) if regdata_key is None else regdata_key
         super().__init__(connection, description)
 
     async def async_added_to_hass(self) -> None:

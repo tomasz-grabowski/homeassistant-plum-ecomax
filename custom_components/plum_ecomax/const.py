@@ -74,6 +74,51 @@ DEFAULT_TOLERANCE: Final = 0.1
 # Events.
 EVENT_PLUM_ECOMAX_ALERT: Final = "plum_ecomax_alert"
 
+# Units.
+FLOW_KG_H: Final = "kg/h"
+
+# Extended parameters.
+ATTR_CONTROL_MODE: Final = "control_mode"
+
+# Regdata keys are device-specific, so built-in regdata entities are only
+# created for the products (product id, model) they were confirmed on.
+REGDATA_PRODUCTS: Final[set[tuple[int, str]]] = {(41, "ecoMAX 860P4-NM TOUCH")}
+
+# Legacy parameters that hold the same setting as an extended parameter,
+# keyed by the legacy key. Legacy entities are not created when the
+# extended parameter is available.
+EXTENDED_PARAMETER_REPLACEMENTS: Final[dict[str, str]] = {
+    "airflow_power_100": "fan_speed_100",
+    "airflow_power_50": "fan_speed_50",
+    "airflow_power_30": "fan_speed_30",
+    "boiler_alert_temp": "boiler_cooling_temp",
+    "burning_off_airflow_power": "burning_off_fan_speed",
+    "burning_off_min_time": "min_burning_off_duration",
+    "circulation_pause": "circulation_pump_pause_time",
+    "circulation_work": "circulation_pump_work_time",
+    # The 0x35 exhaust fan output bit is never set on the ecoMAX 860P4, so
+    # hide the always-off sensor when the 860P4 extended table is present.
+    "fan2_exhaust": "exhaust_fan_pi_gain",
+    "fuel_detection_time": "no_fuel_detection_time",
+    "fuzzy_logic": ATTR_CONTROL_MODE,
+    "heating_pump_enable_temp": "heating_pump_start_temp",
+    "kindling_min_power_time": "glowing_duration",
+    "kindling_test_time": "ignition_test_time",
+    "kindling_airflow_power": "kindling_fan_speed",
+    "kindling_feeder_dose": "kindling_fuel_dose",
+    "kindling_time": "kindling_duration",
+    "max_fan_power": "max_fan_output",
+    "max_heating_target_temp": "max_boiler_target_temp",
+    "min_fan_power": "min_fan_output",
+    "min_heating_target_temp": "min_boiler_target_temp",
+    "stabilization_airflow_power": "stabilization_fan_speed",
+    "supervision_airflow_power": "supervision_fan_speed",
+    "supervision_time": "supervision_duration",
+    "thermostat_decrease_target_temp": "thermostat_decrease_boiler_temp",
+    "warming_up_pause_time": "burner_cleaning_interval",
+    "warming_up_time": "warming_up_duration",
+}
+
 
 @unique
 class DeviceType(StrEnum):
