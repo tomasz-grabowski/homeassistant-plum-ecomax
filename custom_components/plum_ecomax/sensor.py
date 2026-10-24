@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import asdict, astuple, dataclass
+from collections.abc import Callable, Generator
+from dataclasses import asdict, astuple, dataclass, replace
 from functools import partial
 import logging
 from typing import Any, Final, cast
@@ -17,6 +17,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
+    REVOLUTIONS_PER_MINUTE,
     STATE_IDLE,
     STATE_OFF,
     STATE_PAUSED,
@@ -24,7 +25,9 @@ from homeassistant.const import (
     Platform,
     UnitOfMass,
     UnitOfPower,
+    UnitOfPressure,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
@@ -36,12 +39,19 @@ from pyplumio.structures.sensor_data import ConnectedModules
 
 from . import PlumEcomaxConfigEntry
 from .connection import EcomaxConnection
-from .const import DEFAULT_TOLERANCE, DeviceType, ModuleType
+from .const import (
+    ATTR_REGDATA,
+    DEFAULT_TOLERANCE,
+    REGDATA_PRODUCTS,
+    DeviceType,
+    ModuleType,
+)
 from .entity import (
     EcomaxEntity,
     EcomaxEntityDescription,
     MixerEntity,
     RegdataEntity,
+    RegdataEntityDescription,
     ThermostatEntity,
     async_get_by_modules,
     async_get_by_product_type,
@@ -58,6 +68,8 @@ STATE_KINDLING: Final = "kindling"
 STATE_HEATING: Final = "heating"
 STATE_BURNING_OFF: Final = "burning_off"
 STATE_ALERT: Final = "alert"
+STATE_FEEDER_CLEANING: Final = "feeder_cleaning"
+STATE_GLOWING: Final = "glowing"
 STATE_UNKNOWN: Final = "unknown"
 
 EM_TO_HA_STATE: dict[DeviceState, str] = {
@@ -71,6 +83,17 @@ EM_TO_HA_STATE: dict[DeviceState, str] = {
     DeviceState.BURNING_OFF: STATE_BURNING_OFF,
     DeviceState.ALERT: STATE_ALERT,
 }
+
+# Raw state 6 is the kindling feeder cleaning phase on the ecoMAX 860P4.
+EXTENDED_EM_TO_HA_STATE: dict[DeviceState, str] = {
+    **EM_TO_HA_STATE,
+    DeviceState.STANDBY: STATE_FEEDER_CLEANING,
+}
+
+# Regdata 1792 is the phase code on the ecoMAX 860P4, 10 is glowing,
+# which the state frame reports as working.
+REGDATA_PHASE_KEY: Final = 1792
+REGDATA_PHASE_GLOWING: Final = 10
 
 DEVICE_CLASS_METER: Final = "plum_ecomax__meter"
 
@@ -137,6 +160,24 @@ SENSOR_TYPES: tuple[EcomaxSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
         translation_key="water_heater_target",
+        value_fn=lambda x: x,
+    ),
+    EcomaxSensorEntityDescription(
+        key="heating_status",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="heating_status",
+        value_fn=lambda x: x,
+    ),
+    EcomaxSensorEntityDescription(
+        key="water_heater_status",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="water_heater_status",
+        value_fn=lambda x: x,
+    ),
+    EcomaxSensorEntityDescription(
+        key="thermostat",
+        product_types={ProductType.ECOMAX_P},
+        translation_key="thermostat",
         value_fn=lambda x: x,
     ),
     EcomaxSensorEntityDescription(
@@ -366,16 +407,67 @@ class EcomaxSensor(EcomaxEntity, SensorEntity):
         self.async_write_ha_state()
 
 
+class EcomaxStateSensor(EcomaxSensor):
+    """Represents an ecoMAX state sensor that shows the regdata glowing phase."""
+
+    # PyPlumIO stores an event value in the device data only after the
+    # callbacks have run, so keep the phase from the regdata event.
+    _phase: Any = None
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to state and regdata events."""
+        self._phase = self.device.data.get(ATTR_REGDATA, {}).get(REGDATA_PHASE_KEY)
+        await super().async_added_to_hass()
+        self.device.subscribe(ATTR_REGDATA, self.async_update_regdata)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unsubscribe from state and regdata events."""
+        await super().async_will_remove_from_hass()
+        self.device.unsubscribe(ATTR_REGDATA, self.async_update_regdata)
+
+    async def async_update_regdata(self, regdata: dict[int, Any]) -> None:
+        """Update the regdata phase."""
+        self._phase = regdata.get(REGDATA_PHASE_KEY)
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> StateType:
+        """Return the state, glowing if regdata says so."""
+        # Heating is the mapped working state.
+        if (
+            self._attr_native_value == STATE_HEATING
+            and self._phase == REGDATA_PHASE_GLOWING
+        ):
+            return STATE_GLOWING
+
+        return cast(StateType, self._attr_native_value)
+
+
 @callback
-def async_setup_ecomax_sensors(connection: EcomaxConnection) -> list[EcomaxSensor]:
+def async_setup_ecomax_sensors(
+    connection: EcomaxConnection, extended_parameters: bool = False
+) -> list[EcomaxSensor]:
     """Set up the ecoMAX sensors."""
-    return [
-        EcomaxSensor(connection, description)
-        for description in async_get_by_modules(
-            connection.device.modules,
-            async_get_by_product_type(connection.product_type, SENSOR_TYPES),
-        )
-    ]
+    regdata_product = (connection.product_id, connection.model) in REGDATA_PRODUCTS
+    sensors: list[EcomaxSensor] = []
+    for description in async_get_by_modules(
+        connection.device.modules,
+        async_get_by_product_type(connection.product_type, SENSOR_TYPES),
+    ):
+        sensor_class = EcomaxSensor
+        if description.key == "state":
+            if extended_parameters:
+                description = replace(
+                    description,
+                    value_fn=lambda x: EXTENDED_EM_TO_HA_STATE.get(x, STATE_UNKNOWN),
+                )
+
+            if regdata_product:
+                sensor_class = EcomaxStateSensor
+
+        sensors.append(sensor_class(connection, description))
+
+    return sensors
 
 
 @callback
@@ -580,8 +672,97 @@ def async_setup_ecomax_meters(connection: EcomaxConnection) -> list[EcomaxMeter]
 
 
 @dataclass(frozen=True, kw_only=True)
-class RegdataSensorEntityDescription(EcomaxSensorEntityDescription):
+class RegdataSensorEntityDescription(
+    EcomaxSensorEntityDescription, RegdataEntityDescription
+):
     """Describes a regulator data sensor."""
+
+
+# Built-in regdata sensors use named keys with an explicit regdata_key,
+# so their unique ids do not collide with custom regdata sensors, which
+# use the numeric regdata key as the entity key. The ecoMAX 860P4 regdata
+# sensors use the numeric key as their convention: 243 (and 1537 in
+# binary_sensor.py) keep the unique ids, entity ids and history of the
+# former custom entities, and 244 follows them.
+REGDATA_SENSOR_TYPES: tuple[RegdataSensorEntityDescription, ...] = (
+    RegdataSensorEntityDescription(
+        key="draft",
+        device_class=SensorDeviceClass.PRESSURE,
+        native_unit_of_measurement=UnitOfPressure.PA,
+        regdata_key=65,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        translation_key="draft",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="water_pressure",
+        device_class=SensorDeviceClass.PRESSURE,
+        native_unit_of_measurement=UnitOfPressure.BAR,
+        regdata_key=66,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        translation_key="water_pressure",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="power_100_time",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        regdata_key=247,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="power_100_time",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="power_50_time",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        regdata_key=248,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="power_50_time",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="power_30_time",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        regdata_key=249,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="power_30_time",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="feeder_time",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        regdata_key=250,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="feeder_time",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="kindling_count",
+        regdata_key=251,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="kindling_count",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="243",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        translation_key="exhaust_fan_power",
+        value_fn=lambda x: x,
+    ),
+    RegdataSensorEntityDescription(
+        key="244",
+        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        state_class=SensorStateClass.MEASUREMENT,
+        translation_key="fan_rpm",
+        value_fn=lambda x: x,
+    ),
+)
 
 
 class RegdataSensor(RegdataEntity, EcomaxSensor):
@@ -593,6 +774,24 @@ class RegdataSensor(RegdataEntity, EcomaxSensor):
             regdata.get(self._regdata_key, None)
         )
         self.async_write_ha_state()
+
+
+@callback
+def async_get_regdata_sensor_types(
+    connection: EcomaxConnection,
+) -> Generator[RegdataSensorEntityDescription]:
+    """Return the built-in regulator data sensor descriptions for the product."""
+    if (connection.product_id, connection.model) in REGDATA_PRODUCTS:
+        yield from async_get_by_modules(connection.device.modules, REGDATA_SENSOR_TYPES)
+
+
+@callback
+def async_setup_regdata_sensors(connection: EcomaxConnection) -> list[RegdataSensor]:
+    """Set up the regulator data sensors."""
+    return [
+        RegdataSensor(connection, description)
+        for description in async_get_regdata_sensor_types(connection)
+    ]
 
 
 @callback
@@ -661,15 +860,16 @@ async def async_setup_entry(
     _LOGGER.debug("Starting setup of sensor platform...")
 
     connection = entry.runtime_data.connection
-    entities = async_setup_ecomax_sensors(connection)
+    extended_parameters = await connection.async_setup_extended_parameters()
+    entities = async_setup_ecomax_sensors(connection, extended_parameters)
 
     # Add custom ecoMAX sensors.
     entities += async_setup_custom_ecomax_sensors(connection, entry)
 
-    # Add custom regulator data (device-specific) sensors.
-    if (
-        regdata_entities := async_setup_custom_regdata_sensors(connection, entry)
-    ) and await connection.async_setup_regdata():
+    # Add regulator data (device-specific) sensors.
+    regdata_entities = async_setup_regdata_sensors(connection)
+    regdata_entities += async_setup_custom_regdata_sensors(connection, entry)
+    if regdata_entities and await connection.async_setup_regdata():
         entities += regdata_entities
 
     # Add mixer/circuit sensors.

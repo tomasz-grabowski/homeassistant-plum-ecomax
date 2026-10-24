@@ -15,6 +15,13 @@
           "on": "mdi:pump"
         }
       },
+      "circulation_pump_flag": {
+        "default": "mdi:pump",
+        "state": {
+          "off": "mdi:pump-off",
+          "on": "mdi:pump"
+        }
+      },
       "exhaust_fan": {
         "default": "mdi:fan",
         "state": {
@@ -46,6 +53,13 @@
           "on": "mdi:pump"
         }
       },
+      "heating_pump_flag": {
+        "default": "mdi:pump",
+        "state": {
+          "off": "mdi:pump-off",
+          "on": "mdi:pump"
+        }
+      },
       "lighter": {
         "default": "mdi:fire",
         "state": {
@@ -60,6 +74,13 @@
           "on": "mdi:pump"
         }
       },
+      "outer_boiler": {
+        "default": "mdi:water-boiler",
+        "state": {
+          "off": "mdi:water-boiler-off",
+          "on": "mdi:water-boiler"
+        }
+      },
       "solar_pump": {
         "default": "mdi:pump",
         "state": {
@@ -68,6 +89,13 @@
         }
       },
       "water_heater_pump": {
+        "default": "mdi:pump",
+        "state": {
+          "off": "mdi:pump-off",
+          "on": "mdi:pump"
+        }
+      },
+      "water_heater_pump_flag": {
         "default": "mdi:pump",
         "state": {
           "off": "mdi:pump-off",
@@ -95,6 +123,22 @@
       }
     },
     "select": {
+      "control_mode": {
+        "default": "mdi:tune-variant",
+        "state": {
+          "fuzzy_logic": "mdi:brain",
+          "standard": "mdi:tune-variant"
+        }
+      },
+      "h_output_mode": {
+        "default": "mdi:electric-switch"
+      },
+      "mixer_1_thermostat": {
+        "default": "mdi:thermostat"
+      },
+      "return_protection": {
+        "default": "mdi:valve"
+      },
       "summer_mode": {
         "default": "mdi:sun-snowflake-variant",
         "state": {
@@ -102,6 +146,9 @@
           "summer": "mdi:weather-sunny",
           "auto": "mdi:sun-snowflake-variant"
         }
+      },
+      "water_heater_pump_mode": {
+        "default": "mdi:water-pump"
       }
     },
     "sensor": {
@@ -119,6 +166,7 @@
         "state": {
           "alert": "mdi:fire-alert",
           "burning_off": "mdi:fire-extinguisher",
+          "glowing": "mdi:campfire",
           "heating": "mdi:fire",
           "idle": "mdi:power-sleep",
           "kindling": "mdi:fan",
@@ -128,8 +176,17 @@
           "standby": "mdi:power-standby"
         }
       },
+      "exhaust_fan_power": {
+        "default": "mdi:fan"
+      },
       "fan_power": {
         "default": "mdi:fan"
+      },
+      "fan_rpm": {
+        "default": "mdi:speedometer"
+      },
+      "feeder_time": {
+        "default": "mdi:timer-outline"
       },
       "flame_intensity": {
         "default": "mdi:fire"
@@ -140,8 +197,20 @@
       "fuel_level": {
         "default": "mdi:gas-station"
       },
+      "kindling_count": {
+        "default": "mdi:fire"
+      },
       "oxygen_level": {
         "default": "mdi:weather-windy-variant"
+      },
+      "power_100_time": {
+        "default": "mdi:timer-outline"
+      },
+      "power_30_time": {
+        "default": "mdi:timer-outline"
+      },
+      "power_50_time": {
+        "default": "mdi:timer-outline"
       },
       "service_password": {
         "default": "mdi:form-textbox-password"
